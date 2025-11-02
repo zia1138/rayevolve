@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug: rayevolve.launch_hydra",
+      "type": "python",
+      "request": "launch",
+      "module": "rayevolve.launch_hydra",
+      "args": ["variant@_global_=circle_packing_example"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true,
+      "env": {
+        "HYDRA_FULL_ERROR": "1"
+          "PATH": "${env:PATH}",
+          "PYTHONPATH": "${workspaceFolder}"
+      },
+      "python": "${command:python.interpreterPath}"
+    }
+  ]
+}

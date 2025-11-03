@@ -9,6 +9,7 @@ import random
 import numpy as np
 from typing import Any, Dict, List, Optional, Tuple, Union
 import math
+import ray
 from .complexity import analyze_code_metrics
 from .parents import CombinedParentSelector
 from .inspirations import CombinedContextSelector
@@ -242,7 +243,7 @@ class Program:
 
         return cls(**filtered_data)
 
-
+@ray.remote
 class ProgramDatabase:
     """
     SQLite-backed database for storing and managing programs during an
@@ -325,6 +326,28 @@ class ProgramDatabase:
         logger.debug(
             f"Last iter: {self.last_iteration}. Best ID: {self.best_program_id}"
         )
+
+    # Additional functions added to confirm with ray actor remote()
+
+    def get_last_iteration(self) -> int:
+        return self.last_iteration
+
+    def has_island_manager(self) -> bool:
+        return self.island_manager is not None
+
+    def island_manager_has_started_check(self) -> bool:
+        if not self.has_island_manager():
+            return False
+        else:
+            return hasattr(self.island_manager, "are_all_islands_initialized")
+
+    def are_all_islands_initialized(self):
+        if not self.has_island_manager():
+            raise RuntimeError("No island manager available.")
+        else:
+            return self.island_manager.are_all_islands_initialized()
+
+    # End Additional functions -------
 
     def _create_tables(self):
         if not self.cursor or not self.conn:

@@ -7,7 +7,7 @@ import argparse
 import numpy as np
 from typing import Tuple, Optional, List, Dict, Any
 
-from shinka.core import run_shinka_eval
+from rayevolve.core import run_rayevolve_eval
 
 
 def format_centers_string(centers: np.ndarray) -> str:
@@ -133,7 +133,7 @@ def aggregate_circle_packing_metrics(
 
 
 def main(program_path: str, results_dir: str):
-    """Runs the circle packing evaluation using shinka.eval."""
+    """Runs the circle packing evaluation using rayevolve.eval."""
     print(f"Evaluating program: {program_path}")
     print(f"Saving results to: {results_dir}")
     os.makedirs(results_dir, exist_ok=True)
@@ -146,7 +146,7 @@ def main(program_path: str, results_dir: str):
     ) -> Dict[str, Any]:
         return aggregate_circle_packing_metrics(r, results_dir)
 
-    metrics, correct, error_msg = run_shinka_eval(
+    metrics, correct, error_msg = run_rayevolve_eval(
         program_path=program_path,
         results_dir=results_dir,
         experiment_fn_name="run_packing",
@@ -171,7 +171,7 @@ def main(program_path: str, results_dir: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Circle packing evaluator using shinka.eval"
+        description="Circle packing evaluator using rayevolve.eval"
     )
     parser.add_argument(
         "--program_path",

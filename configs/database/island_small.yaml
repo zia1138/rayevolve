@@ -2,7 +2,7 @@
 db_config:
   _target_: rayevolve.database.DatabaseConfig
   db_path: "evolution_db.sqlite"
-  num_islands: 2
+  num_islands: 1
   archive_size: 20
   exploitation_ratio: 0.2
   elite_selection_ratio: 0.3

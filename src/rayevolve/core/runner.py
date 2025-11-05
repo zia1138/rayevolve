@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
+import ray
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
 from rayevolve.llm import (
@@ -159,7 +160,7 @@ class EvolutionRunner:
         embedding_model_to_use = (
             evo_config.embedding_model or "text-embedding-3-small"
         )
-        self.db = ProgramDatabase(
+        self.db = ProgramDatabase.remote(
             config=db_config, embedding_model=embedding_model_to_use
         )
         self.scheduler = JobScheduler(
@@ -246,7 +247,7 @@ class EvolutionRunner:
         self.next_generation_to_submit = 0
 
         if resuming_run:
-            self.completed_generations = self.db.last_iteration + 1
+            self.completed_generations = ray.get(self.db.get_last_iteration.remote()) + 1
             self.next_generation_to_submit = self.completed_generations
             logger.info("=" * 80)
             logger.info("RESUMING PREVIOUS EVOLUTION RUN")
@@ -350,13 +351,13 @@ class EvolutionRunner:
             # All jobs are now handled by the main loop above
 
         # Perform final meta summary for any remaining unprocessed programs
-        best_program = self.db.get_best_program()
+        best_program = ray.get(self.db.get_best_program.remote())
         self.meta_summarizer.perform_final_summary(str(self.results_dir), best_program)
 
         # Save final meta memory state
         self._save_meta_memory()
 
-        self.db.print_summary()
+        ray.get(self.db.print_summary().remote())
         logger.info(f"Evolution completed! {self.completed_generations} generations")
         logger.info("=" * 80)
         end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -541,12 +542,12 @@ class EvolutionRunner:
             },
         )
 
-        self.db.add(db_program, verbose=True)
+        ray.get(self.db.add.remote(db_program, verbose=True))
         if self.llm_selection is not None:
             self.llm_selection.set_baseline_score(
                 db_program.combined_score if correct_val else 0.0,
             )
-        self.db.save()
+        ray.get(self.db.save.remote())
         self._update_best_solution()
 
         # Add the evaluated program to meta memory tracking
@@ -558,7 +559,7 @@ class EvolutionRunner:
                 f"Updating meta memory after processing "
                 f"{len(self.meta_summarizer.evaluated_since_last_meta)} programs..."
             )
-            best_program = self.db.get_best_program()
+            best_program = ray.get(self.db.get_best_program.remote())
             updated_recs, meta_cost = self.meta_summarizer.update_meta_memory(
                 best_program
             )
@@ -594,7 +595,7 @@ class EvolutionRunner:
         have at least one program in the database. This ensures the count
         advances sequentially without gaps.
         """
-        last_gen = self.db.last_iteration
+        last_gen = ray.get(self.db.get_last_iteration.remote())
         if last_gen == -1:
             self.completed_generations = 0
             return
@@ -602,7 +603,7 @@ class EvolutionRunner:
         # Check for contiguous generations from 0 up to last_gen
         completed_up_to = 0
         for i in range(last_gen + 1):
-            if self.db.get_programs_by_generation(i):
+            if ray.get(self.db.get_programs_by_generation.remote(i)):
                 completed_up_to = i + 1
             else:
                 # Found a gap, so contiguous sequence is broken
@@ -650,13 +651,13 @@ class EvolutionRunner:
                         parent_program,
                         archive_programs,
                         top_k_programs,
-                    ) = self.db.sample(
+                    ) = ray.get(self.db.sample.remote(
                         target_generation=current_gen,
                         novelty_attempt=nov_attempt + 1,
                         max_novelty_attempts=self.evo_config.max_novelty_attempts,
                         resample_attempt=resample + 1,
                         max_resample_attempts=self.evo_config.max_patch_resamples,
-                    )
+                    ))
                     archive_insp_ids = [p.id for p in archive_programs]
                     top_k_insp_ids = [p.id for p in top_k_programs]
                     parent_id = parent_program.id
@@ -708,11 +709,9 @@ class EvolutionRunner:
                         break
                     # If not accepted, continue to next attempt (rejection sampling)
                 else:
-                    if not self.db.island_manager or not hasattr(
-                        self.db.island_manager, "are_all_islands_initialized"
-                    ):
+                    if not ray.get(self.db.has_island_manager.remote()) or not ray.get(self.db.island_manager_has_started_check.remote()):
                         self.novelty_judge.log_novelty_skip_message("no island manager")
-                    elif not self.db.island_manager.are_all_islands_initialized():
+                    elif not ray.get(self.db.are_all_islands_initialized.remote()):
                         self.novelty_judge.log_novelty_skip_message(
                             "not all islands initialized yet"
                         )
@@ -841,7 +840,7 @@ class EvolutionRunner:
                 "stderr_log": stderr_log,
             },
         )
-        self.db.add(db_program, verbose=True)
+        ray.get(self.db.add.remote(db_program, verbose=True))
 
         # Add the evaluated program to meta memory tracking
         self.meta_summarizer.add_evaluated_program(db_program)
@@ -910,7 +909,7 @@ class EvolutionRunner:
                     )
                     self.llm_selection.print_summary()
 
-        self.db.save()
+        ray.get(self.db.save.remote())
         self._update_best_solution()
 
         # Note: Meta summarization check is now done after completed generations
@@ -921,7 +920,7 @@ class EvolutionRunner:
 
     def _update_best_solution(self):
         """Checks and updates the best program."""
-        best_programs = self.db.get_top_programs(n=1, correct_only=True)
+        best_programs = ray.get(self.db.get_top_programs.remote(n=1, correct_only=True))
         if not best_programs:
             if self.verbose:
                 logger.debug(

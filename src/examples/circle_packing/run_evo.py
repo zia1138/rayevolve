@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-from shinka.core import EvolutionRunner, EvolutionConfig
-from shinka.database import DatabaseConfig
-from shinka.launch import LocalJobConfig
+from rayevolve.core import EvolutionRunner, EvolutionConfig
+from rayevolve.database import DatabaseConfig
+from rayevolve.launch import LocalJobConfig
 
 job_config = LocalJobConfig(eval_program_path="evaluate.py")
 
 strategy = "weighted"
 if strategy == "uniform":
-    # 1. Uniform from correct programs
+    # 1. Uniform fromru correct programs
     parent_config = dict(
         parent_selection_strategy="power_law",
         exploitation_alpha=0.0,

@@ -246,7 +246,7 @@ class Program:
 @ray.remote
 class ProgramDatabase:
     """
-    SQLite-backed database for storing and managing programs during an
+    SQLite-backedi database for storing and managing programs during an
     evolutionary process.
     Supports MAP-Elites style feature-based organization, island
     populations, and an archive of elites.

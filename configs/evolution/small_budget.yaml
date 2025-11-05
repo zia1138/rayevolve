@@ -7,10 +7,10 @@ evo_config:
     - 0.5
     - 0.5
   num_generations: 20
-  max_parallel_jobs: 1
+  max_parallel_jobs: 10
   max_patch_attempts: 10
   llm_models:
-    - "gemini-2.5-flash"
+    - "gemini-2.5-pro"
   llm_kwargs:    
     max_tokens: 1000000
   llm_dynamic_selection: null

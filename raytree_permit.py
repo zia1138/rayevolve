@@ -1,4 +1,4 @@
-# centralized_sync_db_with_notifier_fixed.py
+# centralized_sync_db_with_semaphores.py
 import os, time, random
 from collections import deque
 import ray
@@ -12,39 +12,55 @@ BRANCHING_P = 0.01
 MAX_CHILDREN = 3
 DONE = "__DONE__"
 
-N_LLM   = 2
-N_HEAVY = 2
+N_LLM   = 1
+N_HEAVY = 1
 
 random.seed(42)
 
-# ---------------- Notifier (async, truly blocking) ----------------
+# ---------------- Permit (async semaphore; bounds wakeups) ----------------
 @ray.remote
-class Notifier:
+class Permit:
     """
-    wait(): blocks until signal() is called (wakes all current waiters).
-    After signaling, we reset the event so future waiters will block again.
+    A per-queue semaphore:
+      - Each available item corresponds to one permit.
+      - Workers acquire() a permit before asking DB for an item.
+      - DB release(k) when it enqueues k items.
+      - shutdown() wakes everybody and causes acquire() to yield DONE.
     """
     def __init__(self):
-        self._event = asyncio.Event()
+        self._sem = asyncio.Semaphore(0)
+        self._shutdown = False
 
-    async def wait(self):
-        await self._event.wait()
-        # auto-reset for next cycle
-        self._event = asyncio.Event()
+    async def acquire(self):
+        # Fast path: if shutdown already requested
+        if self._shutdown:
+            return DONE
+        await self._sem.acquire()
+        # If shutdown flipped while waiting, indicate termination
+        if self._shutdown:
+            return DONE
         return True
 
-    def signal(self):
-        # set() is idempotent; safe to call even if already set
-        self._event.set()
+    def release(self, n: int = 1):
+        # Grant n permits (wake up to n waiters)
+        for _ in range(n):
+            self._sem.release()
 
-# ---------------- FrontierDB (sync) ----------------
+    def shutdown(self):
+        # Flip the flag and massively over-release so all waiters wake.
+        # (Simplest robust approach; avoids tracking exact waiter count.)
+        self._shutdown = True
+        for _ in range(100_000):
+            self._sem.release()
+
+# ---------------- FrontierDB (sync, centralized) ----------------
 @ray.remote
 class FrontierDB:
     """
     Centralized queues + counters + drain detection (synchronous).
-    Uses Notifier to wake workers when new work arrives or on shutdown.
+    Uses per-queue Permits to wake exactly as many workers as new items.
     """
-    def __init__(self, roots, notifier):
+    def __init__(self, roots, permit_llm, permit_heavy):
         self.q_llm = deque()
         self.q_heavy = deque()
 
@@ -53,16 +69,20 @@ class FrontierDB:
         self.enq_heavy = 0; self.deq_heavy = 0; self.inflight_heavy = 0
 
         self.shutdown = False
-        self.notifier = notifier
+        self.permit_llm = permit_llm
+        self.permit_heavy = permit_heavy
 
-        # Seed once
+        # Seed once (all roots start in LLM queue)
         for x in roots:
             self.q_llm.append(x)
             self.enq_llm += 1
 
-        # Evaluate initial state, then wake waiters to start pulling
+        # Release permits for the seeded items so exactly that many workers wake
+        if self.enq_llm:
+            self.permit_llm.release.remote(self.enq_llm)
+
+        # Evaluate initial state
         self._maybe_mark_shutdown()
-        self.notifier.signal.remote()
 
     # ---- LLM stage ----
     def get_llm_item(self):
@@ -73,22 +93,24 @@ class FrontierDB:
             self.deq_llm += 1
             self.inflight_llm += 1
             return item
-        return None  # idle: worker should wait on notifier
+        # With permits, this should be rare; keep as defensive fallback
+        return None
 
     def finish_llm(self, children):
-        enq_count = 0
+        enq_llm, enq_heavy = 0, 0
         for payload, needs_heavy in children:
             if needs_heavy:
-                self.q_heavy.append(payload); self.enq_heavy += 1
+                self.q_heavy.append(payload); self.enq_heavy += 1; enq_heavy += 1
             else:
-                self.q_llm.append(payload);   self.enq_llm += 1
-            enq_count += 1
+                self.q_llm.append(payload);   self.enq_llm   += 1; enq_llm   += 1
 
         self.inflight_llm -= 1
 
-        # If new work arrived, wake any waiters
-        if enq_count > 0:
-            self.notifier.signal.remote()
+        # Release permits to match new items
+        if enq_llm:
+            self.permit_llm.release.remote(enq_llm)
+        if enq_heavy:
+            self.permit_heavy.release.remote(enq_heavy)
 
         self._maybe_mark_shutdown()
 
@@ -104,18 +126,19 @@ class FrontierDB:
         return None
 
     def finish_heavy(self, children):
-        enq_count = 0
+        enq_llm, enq_heavy = 0, 0
         for payload, needs_heavy in children:
             if needs_heavy:
-                self.q_heavy.append(payload); self.enq_heavy += 1
+                self.q_heavy.append(payload); self.enq_heavy += 1; enq_heavy += 1
             else:
-                self.q_llm.append(payload);   self.enq_llm += 1
-            enq_count += 1
+                self.q_llm.append(payload);   self.enq_llm   += 1; enq_llm   += 1
 
         self.inflight_heavy -= 1
 
-        if enq_count > 0:
-            self.notifier.signal.remote()
+        if enq_llm:
+            self.permit_llm.release.remote(enq_llm)
+        if enq_heavy:
+            self.permit_heavy.release.remote(enq_heavy)
 
         self._maybe_mark_shutdown()
 
@@ -130,7 +153,8 @@ class FrontierDB:
         if idle and empty:
             self.shutdown = True
             # Wake all waiters so they can observe DONE and exit
-            self.notifier.signal.remote()
+            self.permit_llm.shutdown.remote()
+            self.permit_heavy.shutdown.remote()
 
 # ---- Helpers ----
 def make_children(item, heavy_prob: float, kmax: int):
@@ -142,18 +166,21 @@ def make_children(item, heavy_prob: float, kmax: int):
             kids.append((payload, needs_heavy))
     return kids
 
-# ---- Workers (synchronous; no polling) ----
+# ---- Workers (no polling; permit-first) ----
 @ray.remote(num_cpus=0.25)   # I/O-ish LLM step
 class LLMWorker:
-    def run(self, db, notifier):
+    def run(self, db, permit_llm):
         while True:
+            tok = ray.get(permit_llm.acquire.remote())
+            if tok == DONE:
+                return "llm-done"
+
             item = ray.get(db.get_llm_item.remote())
-            print(item)
+            print("[LLM]", item)
             if item == DONE:
                 return "llm-done"
             if item is None:
-                # Block until DB signals new work or shutdown
-                ray.get(notifier.wait.remote())
+                # Defensive fallback (permits should prevent this)
                 continue
 
             # blocking I/O simulation
@@ -164,14 +191,17 @@ class LLMWorker:
 
 @ray.remote(num_cpus=1)      # CPU-bound heavy step
 class HeavyWorker:
-    def run(self, db, notifier):
+    def run(self, db, permit_heavy):
         while True:
+            tok = ray.get(permit_heavy.acquire.remote())
+            if tok == DONE:
+                return "heavy-done"
+
             item = ray.get(db.get_heavy_item.remote())
-            print(item)
+            print("[HEAVY]", item)
             if item == DONE:
                 return "heavy-done"
             if item is None:
-                ray.get(notifier.wait.remote())
                 continue
 
             # compute simulation
@@ -185,12 +215,14 @@ def main():
     ray.init()
 
     roots = [f"root-{i}" for i in range(SEED_ITEMS)]
-    notifier = Notifier.remote()
-    db = FrontierDB.remote(roots, notifier)
+    permit_llm   = Permit.remote()
+    permit_heavy = Permit.remote()
+    db = FrontierDB.remote(roots, permit_llm, permit_heavy)
 
     llm_workers   = [LLMWorker.remote() for _ in range(N_LLM)]
     heavy_workers = [HeavyWorker.remote() for _ in range(N_HEAVY)]
-    tasks = [w.run.remote(db, notifier) for w in (llm_workers + heavy_workers)]
+    tasks = [w.run.remote(db, permit_llm) for w in llm_workers] + \
+            [w.run.remote(db, permit_heavy) for w in heavy_workers]
 
     results = ray.get(tasks)
     print("[done]", results)

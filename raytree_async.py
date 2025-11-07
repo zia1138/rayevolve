@@ -15,7 +15,7 @@ DONE = "__DONE__"
 N_LLM   = 2
 N_HEAVY = 2
 
-
+random.seed(42)
 
 # ---------------------------------------------------------------------------
 # FrontierDB (async)
@@ -129,6 +129,7 @@ class LLMWorker:
         while True:
             # ✅ Await the ObjectRef directly; do NOT call .__await__()
             item = await db.get_llm_item.remote()
+            print(item)
             if item == DONE:
                 return "llm-done"
             # simulate async I/O (e.g., LLM API)
@@ -141,6 +142,7 @@ class HeavyWorker:
     async def run(self, db):
         while True:
             item = await db.get_heavy_item.remote()
+            print(item)
             if item == DONE:
                 return "heavy-done"
             await asyncio.sleep(random.uniform(*HEAVY_LATENCY_S))

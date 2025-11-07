@@ -1,7 +1,8 @@
-# centralized_sync_db_with_notifier.py
+# centralized_sync_db_with_notifier_fixed.py
 import os, time, random
 from collections import deque
 import ray
+import asyncio
 
 # ---- Tunables ----
 SEED_ITEMS = 25
@@ -16,29 +17,32 @@ N_HEAVY = 1
 
 random.seed(42)
 
-# ---------------- Notifier ----------------
+# ---------------- Notifier (async, truly blocking) ----------------
 @ray.remote
 class Notifier:
     """
-    A tiny event primitive:
-      - wait(): returns an ObjectRef token; ray.get(token) blocks until next signal().
-      - signal(): rotates the token so all current waiters wake up.
+    wait(): blocks until signal() is called (wakes all current waiters).
+    After signaling, we reset the event so future waiters will block again.
     """
     def __init__(self):
-        self._token = ray.put(object())  # current epoch token
+        self._event = asyncio.Event()
 
-    def wait(self):
-        return self._token
+    async def wait(self):
+        await self._event.wait()
+        # auto-reset for next cycle
+        self._event = asyncio.Event()
+        return True
 
     def signal(self):
-        self._token = ray.put(object())
+        # set() is idempotent; safe to call even if already set
+        self._event.set()
 
 # ---------------- FrontierDB (sync) ----------------
 @ray.remote
 class FrontierDB:
     """
     Centralized queues + counters + drain detection (synchronous).
-    Uses Notifier to wake workers when new work arrives or when shutdown occurs.
+    Uses Notifier to wake workers when new work arrives or on shutdown.
     """
     def __init__(self, roots, notifier):
         self.q_llm = deque()
@@ -56,9 +60,8 @@ class FrontierDB:
             self.q_llm.append(x)
             self.enq_llm += 1
 
-        # After seeding, we might already be empty (degenerate case). Check & signal.
+        # Evaluate initial state, then wake waiters to start pulling
         self._maybe_mark_shutdown()
-        # Either way, wake initial waiters so they start pulling.
         self.notifier.signal.remote()
 
     # ---- LLM stage ----
@@ -70,10 +73,9 @@ class FrontierDB:
             self.deq_llm += 1
             self.inflight_llm += 1
             return item
-        return None  # temporarily empty; worker should wait on notifier
+        return None  # idle: worker should wait on notifier
 
     def finish_llm(self, children):
-        # Route children
         enq_count = 0
         for payload, needs_heavy in children:
             if needs_heavy:
@@ -82,14 +84,12 @@ class FrontierDB:
                 self.q_llm.append(payload);   self.enq_llm += 1
             enq_count += 1
 
-        # Mark completion
         self.inflight_llm -= 1
 
-        # If we enqueued anything or changed state, wake waiters
+        # If new work arrived, wake any waiters
         if enq_count > 0:
             self.notifier.signal.remote()
 
-        # Possibly transition to shutdown
         self._maybe_mark_shutdown()
 
     # ---- Heavy stage ----
@@ -142,16 +142,17 @@ def make_children(item, heavy_prob: float, kmax: int):
             kids.append((payload, needs_heavy))
     return kids
 
-# ---- Workers (synchronous, no polling) ----
+# ---- Workers (synchronous; no polling) ----
 @ray.remote(num_cpus=0.25)   # I/O-ish LLM step
 class LLMWorker:
     def run(self, db, notifier):
         while True:
             item = ray.get(db.get_llm_item.remote())
+            print(item)
             if item == DONE:
                 return "llm-done"
             if item is None:
-                # Block until DB signals new work *or* shutdown
+                # Block until DB signals new work or shutdown
                 ray.get(notifier.wait.remote())
                 continue
 
@@ -166,6 +167,7 @@ class HeavyWorker:
     def run(self, db, notifier):
         while True:
             item = ray.get(db.get_heavy_item.remote())
+            print(item)
             if item == DONE:
                 return "heavy-done"
             if item is None:
@@ -184,7 +186,7 @@ def main():
 
     roots = [f"root-{i}" for i in range(SEED_ITEMS)]
     notifier = Notifier.remote()
-    db = FrontierDB.remote(roots, notifier)  # seed once; DB handles shutdown + signals
+    db = FrontierDB.remote(roots, notifier)
 
     llm_workers   = [LLMWorker.remote() for _ in range(N_LLM)]
     heavy_workers = [HeavyWorker.remote() for _ in range(N_HEAVY)]
@@ -192,7 +194,6 @@ def main():
 
     results = ray.get(tasks)
     print("[done]", results)
-
     ray.shutdown()
 
 if __name__ == "__main__":

@@ -357,7 +357,7 @@ class EvolutionRunner:
         # Save final meta memory state
         self._save_meta_memory()
 
-        ray.get(self.db.print_summary().remote())
+        ray.get(self.db.print_summary.remote())
         logger.info(f"Evolution completed! {self.completed_generations} generations")
         logger.info("=" * 80)
         end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

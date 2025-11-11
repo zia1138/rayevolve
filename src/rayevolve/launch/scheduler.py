@@ -4,8 +4,8 @@ import asyncio
 from dataclasses import dataclass, asdict, field
 from typing import Optional, Dict, Any, Tuple, Union, List
 from concurrent.futures import ThreadPoolExecutor
-from .local import submit as submit_local, monitor as monitor_local
-from .local import ProcessWithLogging
+from .local_sync import submit as submit_local, monitor as monitor_local
+from .local_sync import ProcessWithLogging
 from .slurm import (
     submit_docker as submit_slurm_docker,
     submit_conda as submit_slurm_conda,

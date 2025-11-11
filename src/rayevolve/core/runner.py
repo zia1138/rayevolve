@@ -1,4 +1,5 @@
 import shutil
+import sys
 import uuid
 import time
 import logging
@@ -13,6 +14,7 @@ from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
 import ray
+import asyncio
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
 from rayevolve.llm import (
@@ -87,6 +89,28 @@ class RunningJob:
 logger = logging.getLogger(__name__)
 
 
+@ray.remote
+class Notifier:
+    """
+    wait(): blocks until signal() is called (wakes all current waiters).
+    After signaling, we reset the event so future waiters will block again.
+    """
+    def __init__(self):
+        self._event = asyncio.Event()
+
+    async def wait(self):
+        await self._event.wait()
+        # auto-reset for next cycle
+        self._event = asyncio.Event()
+        return True
+
+    def signal(self):
+        # set() is idempotent; safe to call even if already set
+        self._event.set()
+
+
+
+
 class EvolutionRunner:
     def __init__(
         self,
@@ -99,6 +123,8 @@ class EvolutionRunner:
         self.job_config = job_config
         self.db_config = db_config
         self.verbose = verbose
+
+        print(evo_config)
 
         if evo_config.results_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -289,6 +315,11 @@ class EvolutionRunner:
             yaml.dump(config_data, f, default_flow_style=False, indent=2)
 
         logger.info(f"Experiment configuration saved to {config_path}")
+
+    def run_ray(self):
+        self._run_generation0_ray()
+
+        pass
 
     def run(self):
         """Run evolution with parallel job queue."""
@@ -1005,6 +1036,8 @@ class EvolutionRunner:
         diff_summary = {}
 
         for patch_attempt in range(max_patch_attempts):
+            if "max_tokens" in llm_kwargs:
+                del llm_kwargs["max_tokens"]
             response = self.llm.query(
                 msg=patch_msg,
                 system_msg=patch_sys,

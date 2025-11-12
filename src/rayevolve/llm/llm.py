@@ -1241,7 +1241,7 @@ def query_fn(
     kwargs: Dict = {},
     total_samples: int = 1,
     output_model: Optional[BaseModel] = None,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> tuple[int, Optional[QueryResult]]:
     if verbose:
         logger.info(f"==> SAMPLING: {idx + 1}/{total_samples} {list(kwargs.values())}")
@@ -1279,7 +1279,7 @@ def sample_kwargs_query_fn(
     model_sample_probs: Optional[List[float]] = None,
     output_model: Optional[BaseModel] = None,
     total_samples: int = 1,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> tuple[int, Optional[QueryResult]]:
     kwargs = sample_model_kwargs(
         model_names=model_names,

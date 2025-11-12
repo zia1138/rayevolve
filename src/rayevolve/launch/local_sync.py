@@ -64,7 +64,7 @@ class ProcessWithLogging:
         pass
 
 
-def submit(log_dir: str, cmd: list[str], verbose: bool = False):
+def submit(log_dir: str, cmd: list[str], verbose: bool = True):
     """
     Submits a command for local execution (synchronously) and logs output.
 

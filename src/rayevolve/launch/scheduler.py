@@ -77,7 +77,7 @@ class JobScheduler:
             SlurmDockerJobConfig,
             SlurmCondaJobConfig,
         ],
-        verbose: bool = False,
+        verbose: bool = True,
         max_workers: int = 4,
     ):
         self.job_type = job_type

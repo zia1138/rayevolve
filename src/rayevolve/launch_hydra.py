@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from rayevolve.core import EvolutionRunner
-import ray
+#import ray
 
 
 @hydra.main(config_path="../../configs", config_name="config", version_base=None)
@@ -20,7 +20,7 @@ def main(cfg: DictConfig):
     db_cfg = hydra.utils.instantiate(cfg.db_config)
     evo_cfg = hydra.utils.instantiate(cfg.evo_config)
 
-    ray.init()
+    #ray.init()
 
     evo_runner = EvolutionRunner(
         evo_config=evo_cfg,
@@ -28,9 +28,9 @@ def main(cfg: DictConfig):
         db_config=db_cfg,
         verbose=cfg.verbose,
     )
-    evo_runner.run()
+    evo_runner.run_simplified()
     
-    ray.shutdown()
+    #ray.shutdown()
 
 
 if __name__ == "__main__":

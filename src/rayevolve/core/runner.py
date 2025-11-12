@@ -13,8 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
-import ray
+#import ray
 import asyncio
+from ray_ideas.raytree import SEED_ITEMS
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
 from rayevolve.llm import (
@@ -89,27 +90,6 @@ class RunningJob:
 logger = logging.getLogger(__name__)
 
 
-@ray.remote
-class Notifier:
-    """
-    wait(): blocks until signal() is called (wakes all current waiters).
-    After signaling, we reset the event so future waiters will block again.
-    """
-    def __init__(self):
-        self._event = asyncio.Event()
-
-    async def wait(self):
-        await self._event.wait()
-        # auto-reset for next cycle
-        self._event = asyncio.Event()
-        return True
-
-    def signal(self):
-        # set() is idempotent; safe to call even if already set
-        self._event.set()
-
-
-
 
 class EvolutionRunner:
     def __init__(
@@ -123,8 +103,6 @@ class EvolutionRunner:
         self.job_config = job_config
         self.db_config = db_config
         self.verbose = verbose
-
-        print(evo_config)
 
         if evo_config.results_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -186,9 +164,12 @@ class EvolutionRunner:
         embedding_model_to_use = (
             evo_config.embedding_model or "text-embedding-3-small"
         )
-        self.db = ProgramDatabase.remote(
+        #self.db = ProgramDatabase.remote(
+        #    config=db_config, embedding_model=embedding_model_to_use
+        #)
+        self.db = ProgramDatabase(
             config=db_config, embedding_model=embedding_model_to_use
-        )
+        )        
         self.scheduler = JobScheduler(
             job_type=evo_config.job_type,
             config=job_config,  # type: ignore
@@ -273,7 +254,8 @@ class EvolutionRunner:
         self.next_generation_to_submit = 0
 
         if resuming_run:
-            self.completed_generations = ray.get(self.db.get_last_iteration.remote()) + 1
+            #self.completed_generations = ray.get(self.db.get_last_iteration.remote()) + 1
+            self.completed_generations = self.db.get_last_iteration() + 1
             self.next_generation_to_submit = self.completed_generations
             logger.info("=" * 80)
             logger.info("RESUMING PREVIOUS EVOLUTION RUN")
@@ -315,85 +297,6 @@ class EvolutionRunner:
             yaml.dump(config_data, f, default_flow_style=False, indent=2)
 
         logger.info(f"Experiment configuration saved to {config_path}")
-
-    def run_ray(self):
-        self._run_generation0_ray()
-
-        pass
-
-    def run(self):
-        """Run evolution with parallel job queue."""
-        max_jobs = self.evo_config.max_parallel_jobs
-        target_gens = self.evo_config.num_generations
-        logger.info(
-            f"Starting evolution with {max_jobs} parallel jobs, "
-            f"target: {target_gens} generations"
-        )
-
-        # First, run generation 0 sequentially to populate the database
-        if self.completed_generations == 0 and target_gens > 0:
-            logger.info("Running generation 0 sequentially to initialize database...")
-            self._run_generation_0()
-            self.completed_generations = 1
-            self.next_generation_to_submit = 1
-            logger.info(f"Completed generation 0, total: 1/{target_gens}")
-
-        # Now start parallel execution for remaining generations
-        if self.completed_generations < target_gens:
-            logger.info("Starting parallel execution for remaining generations...")
-
-            # Main loop: monitor jobs and submit new ones
-            while (
-                self.completed_generations < target_gens or len(self.running_jobs) > 0
-            ):
-                # Check for completed jobs
-                completed_jobs = self._check_completed_jobs()
-
-                # Process completed jobs
-                if completed_jobs:
-                    for job in completed_jobs:
-                        self._process_completed_job(job)
-
-                    # Update completed generations count
-                    self._update_completed_generations()
-
-                    if self.verbose:
-                        logger.info(
-                            f"Processed {len(completed_jobs)} jobs. "
-                            f"Total completed generations: "
-                            f"{self.completed_generations}/{target_gens}"
-                        )
-
-                # Check if we've completed all generations
-                if self.completed_generations >= target_gens:
-                    logger.info("All generations completed, exiting...")
-                    break
-
-                # Submit new jobs to fill the queue (only if we have capacity)
-                if (
-                    len(self.running_jobs) < max_jobs
-                    and self.next_generation_to_submit < target_gens
-                ):
-                    self._submit_new_job()
-
-                # Wait a bit before checking again
-                time.sleep(2)
-
-            # All jobs are now handled by the main loop above
-
-        # Perform final meta summary for any remaining unprocessed programs
-        best_program = ray.get(self.db.get_best_program.remote())
-        self.meta_summarizer.perform_final_summary(str(self.results_dir), best_program)
-
-        # Save final meta memory state
-        self._save_meta_memory()
-
-        ray.get(self.db.print_summary.remote())
-        logger.info(f"Evolution completed! {self.completed_generations} generations")
-        logger.info("=" * 80)
-        end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"Evolution run ended at {end_time}")
-        logger.info("=" * 80)
 
     def generate_initial_program(self):
         """Generate initial program with LLM, with retries."""
@@ -619,6 +522,524 @@ class EvolutionRunner:
         # Save meta memory state after each job completion
         self._save_meta_memory()
 
+    def _run_generation_0_simplified(self):
+        initial_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0"
+        Path(initial_dir).mkdir(parents=True, exist_ok=True)
+        exec_fname = f"{initial_dir}/main.{self.lang_ext}"
+        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0/results"
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+        api_costs = 0.0
+        patch_name = "initial_program"
+        patch_description = "Initial program from file."
+        patch_type = "init"
+
+        shutil.copy(self.evo_config.init_program_path, exec_fname)
+        results, rtime = self.scheduler.run(exec_fname, results_dir)
+        code_embedding, e_cost = self.get_code_embedding(exec_fname)
+
+        evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
+
+        correct_val = results.get("correct", {}).get("correct", False)
+        metrics_val = results.get("metrics", {})
+        stdout_log = results.get("stdout_log", "")
+        stderr_log = results.get("stderr_log", "")
+
+        combined_score = metrics_val.get("combined_score", 0.0)
+        public_metrics = metrics_val.get("public", {})
+        private_metrics = metrics_val.get("private", {})
+        text_feedback = metrics_val.get("text_feedback", "")
+
+        # Add the program to the database
+        db_program = Program(
+            id=str(uuid.uuid4()),
+            code=evaluated_code,
+            language=self.evo_config.language,
+            parent_id=None,
+            generation=0,
+            archive_inspiration_ids=[],
+            top_k_inspiration_ids=[],
+            code_diff=None,
+            embedding=code_embedding,
+            correct=correct_val,
+            combined_score=combined_score,
+            public_metrics=public_metrics,
+            private_metrics=private_metrics,
+            text_feedback=text_feedback,
+            metadata={
+                "compute_time": rtime,
+                "api_costs": api_costs,
+                "embed_cost": e_cost,
+                "novelty_cost": 0.0,  # No novelty cost for generation 0
+                "patch_type": patch_type,
+                "patch_name": patch_name,
+                "patch_description": patch_description,
+                "stdout_log": stdout_log,
+                "stderr_log": stderr_log,
+            },
+        )
+        #ray.get(self.db.add.remote(db_program, verbose=True))
+        #ray.get(self.db.save.remote())
+        self.db.add(db_program, verbose=True)
+        self.db.save()
+        self._update_best_solution()
+
+    def _submit_new_job_simplified(self):
+        """1. call LLM and patch to generate new program
+        2. submit and run the job
+        """
+        current_gen = self.next_generation_to_submit
+        self.next_generation_to_submit += 1
+        exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
+        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+        api_costs = 0
+        embed_cost = 0
+        novelty_cost = 0.0
+        # Loop over patch resamples - including parents
+        for resample in range(self.evo_config.max_patch_resamples):
+            (
+                parent_program,
+                archive_programs,
+                top_k_programs,
+            ) = self.db.sample( #ray.get(self.db.sample.remote(
+                target_generation=current_gen,
+                novelty_attempt=1,
+                max_novelty_attempts=self.evo_config.max_novelty_attempts,
+                resample_attempt=resample + 1,
+                max_resample_attempts=self.evo_config.max_patch_resamples,
+            )
+            archive_insp_ids = [p.id for p in archive_programs]
+            top_k_insp_ids = [p.id for p in top_k_programs]
+            parent_id = parent_program.id
+            # Run patch (until success with max attempts)
+            code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
+                parent_program,
+                archive_programs,
+                top_k_programs,
+                current_gen,
+                novelty_attempt=1,
+                resample_attempt=resample + 1,
+            )
+            api_costs += meta_patch_data["api_costs"]
+            if (
+                meta_patch_data["error_attempt"] is None
+                and num_applied_attempt > 0
+            ):
+                meta_patch_data["api_costs"] = api_costs
+                break
+
+        # Get the code embedding for the evaluated code
+        code_embedding, e_cost = self.get_code_embedding(exec_fname)
+        embed_cost += e_cost
+
+        # Submit the job (runs it sync not async with local sync scheduler)
+        job_id = self.scheduler.submit_async(exec_fname, results_dir)
+
+        # Add to running jobs queue
+        running_job = RunningJob(
+            job_id=job_id,
+            exec_fname=exec_fname,
+            results_dir=results_dir,
+            start_time=time.time(),
+            generation=current_gen,
+            parent_id=parent_id,
+            archive_insp_ids=archive_insp_ids,
+            top_k_insp_ids=top_k_insp_ids,
+            code_diff=code_diff,
+            meta_patch_data=meta_patch_data,
+            code_embedding=code_embedding,
+            embed_cost=embed_cost,
+            novelty_cost=novelty_cost,
+        )
+        
+        return running_job
+        
+    def _process_completed_job_simplified(self, job: RunningJob):
+        """ add result to database and update bast solution """
+        end_time = time.time()
+        rtime = end_time - job.start_time
+        results = self.scheduler.get_job_results(job.job_id, job.results_dir)
+
+        # Read the evaluated code
+        evaluated_code = Path(job.exec_fname).read_text(encoding="utf-8")
+
+        # Use pre-computed embedding and novelty costs
+        code_embedding = job.code_embedding
+        e_cost = job.embed_cost
+        n_cost = job.novelty_cost
+
+        correct_val = False
+        metrics_val = {}
+        stdout_log = ""
+        stderr_log = ""
+        if results:
+            correct_val = results.get("correct", {}).get("correct", False)
+            metrics_val = results.get("metrics", {})
+            stdout_log = results.get("stdout_log", "")
+            stderr_log = results.get("stderr_log", "")
+
+        combined_score = metrics_val.get("combined_score", 0.0)
+        public_metrics = metrics_val.get("public", {})
+        private_metrics = metrics_val.get("private", {})
+        text_feedback = metrics_val.get("text_feedback", "")
+
+        # Add the program to the database
+        db_program = Program(
+            id=str(uuid.uuid4()),
+            code=evaluated_code,
+            language=self.evo_config.language,
+            parent_id=job.parent_id,
+            generation=job.generation,
+            archive_inspiration_ids=job.archive_insp_ids,
+            top_k_inspiration_ids=job.top_k_insp_ids,
+            code_diff=job.code_diff,
+            embedding=code_embedding,
+            correct=correct_val,
+            combined_score=combined_score,
+            public_metrics=public_metrics,
+            private_metrics=private_metrics,
+            text_feedback=text_feedback,
+            metadata={
+                "compute_time": rtime,
+                **(job.meta_patch_data or {}),
+                "embed_cost": e_cost,
+                "novelty_cost": n_cost,
+                "stdout_log": stdout_log,
+                "stderr_log": stderr_log,
+            },
+        )
+        #ray.get(self.db.add.remote(db_program, verbose=True))
+        #ray.get(self.db.save.remote())
+        self.db.add(db_program, verbose=True)
+        self.db.save()       
+        self._update_best_solution()
+
+
+    def run_simplified(self):
+        self._run_generation_0_simplified()
+        self.next_generation_to_submit = 1
+        for i in range(1, self.evo_config.num_generations):
+            job = self._submit_new_job_simplified()
+            self._process_completed_job_simplified(job)
+            self._update_completed_generations()
+
+    def run_ray(self):
+        self._run_generation_0_simplified()
+
+        #roots = [f"root-{i}" for i in range(SEED_ITEMS)]
+        #notifier = Notifier.remote()
+        #self.db.set_notifier.remote(notifier)
+
+        #workers   = [ShinkaWorker.remote() for _ in range(N_WORKERS)]
+        #tasks = [w.run.remote(self.db, notifier) for w in workers]
+
+        #results = ray.get(tasks)
+
+    def run(self):
+        """Run evolution with parallel job queue."""
+        max_jobs = self.evo_config.max_parallel_jobs
+        target_gens = self.evo_config.num_generations
+        logger.info(
+            f"Starting evolution with {max_jobs} parallel jobs, "
+            f"target: {target_gens} generations"
+        )
+
+        # First, run generation 0 sequentially to populate the database
+        if self.completed_generations == 0 and target_gens > 0:
+            logger.info("Running generation 0 sequentially to initialize database...")
+            self._run_generation_0()
+            self.completed_generations = 1
+            self.next_generation_to_submit = 1
+            logger.info(f"Completed generation 0, total: 1/{target_gens}")
+
+        # Now start parallel execution for remaining generations
+        if self.completed_generations < target_gens:
+            logger.info("Starting parallel execution for remaining generations...")
+
+            # Main loop: monitor jobs and submit new ones
+            while (
+                self.completed_generations < target_gens or len(self.running_jobs) > 0
+            ):
+                # Check for completed jobs
+                completed_jobs = self._check_completed_jobs()
+
+                # Process completed jobs
+                if completed_jobs:
+                    for job in completed_jobs:
+                        self._process_completed_job(job)
+
+                    # Update completed generations count
+                    self._update_completed_generations()
+
+                    if self.verbose:
+                        logger.info(
+                            f"Processed {len(completed_jobs)} jobs. "
+                            f"Total completed generations: "
+                            f"{self.completed_generations}/{target_gens}"
+                        )
+
+                # Check if we've completed all generations
+                if self.completed_generations >= target_gens:
+                    logger.info("All generations completed, exiting...")
+                    break
+
+                # Submit new jobs to fill the queue (only if we have capacity)
+                if (
+                    len(self.running_jobs) < max_jobs
+                    and self.next_generation_to_submit < target_gens
+                ):
+                    self._submit_new_job()
+
+                # Wait a bit before checking again
+                #time.sleep(2)
+
+            # All jobs are now handled by the main loop above
+
+        # Perform final meta summary for any remaining unprocessed programs
+        #best_program = ray.get(self.db.get_best_program.remote())
+        best_program = self.db.get_best_program()
+        self.meta_summarizer.perform_final_summary(str(self.results_dir), best_program)
+
+        # Save final meta memory state
+        self._save_meta_memory()
+
+        #ray.get(self.db.print_summary.remote())
+        self.db.print_summary()
+
+        logger.info(f"Evolution completed! {self.completed_generations} generations")
+        logger.info("=" * 80)
+        end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(f"Evolution run ended at {end_time}")
+        logger.info("=" * 80)
+
+    def generate_initial_program(self):
+        """Generate initial program with LLM, with retries."""
+        llm_kwargs = self.llm.get_kwargs()
+
+        sys_msg, user_msg = self.prompt_sampler.initial_program_prompt()
+        msg_history = []
+        total_costs = 0.0
+
+        for attempt in range(self.evo_config.max_patch_attempts):
+            response = self.llm.query(
+                msg=user_msg,
+                system_msg=sys_msg,
+                llm_kwargs=llm_kwargs,
+                msg_history=msg_history,
+            )
+            if response is None or response.content is None:
+                if self.verbose:
+                    logger.info(
+                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
+                        f"{self.evo_config.max_patch_attempts} "
+                        "FAILURE. Error: LLM response content was None."
+                    )
+                if attempt < self.evo_config.max_patch_attempts - 1:
+                    user_msg = (
+                        "The previous response was empty. Please try again "
+                        "and provide the full code."
+                    )
+                    if response and response.new_msg_history:
+                        msg_history = response.new_msg_history
+                    continue
+                else:
+                    break
+
+            total_costs += response.cost or 0
+            initial_code = extract_between(
+                response.content,
+                f"```{self.evo_config.language}",
+                "```",
+                False,
+            )
+
+            if initial_code:
+                patch_name = extract_between(
+                    response.content, "<NAME>", "</NAME>", False
+                )
+                patch_description = extract_between(
+                    response.content, "<DESCRIPTION>", "</DESCRIPTION>", False
+                )
+                if self.evo_config.language == "python":
+                    comment_char = "#"
+                else:
+                    comment_char = "//"
+
+                initial_code = (
+                    f"{comment_char} EVOLVE-BLOCK-START\n"
+                    f"{initial_code}\n"
+                    f"{comment_char} EVOLVE-BLOCK-END\n"
+                )
+
+                if self.verbose:
+                    logger.info(
+                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
+                        f"{self.evo_config.max_patch_attempts} "
+                        "SUCCESS."
+                    )
+                return initial_code, patch_name, patch_description, total_costs
+            else:  # code extraction failed
+                if self.verbose:
+                    logger.info(
+                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
+                        f"{self.evo_config.max_patch_attempts} "
+                        "FAILURE. Error: Could not extract code from response."
+                    )
+                if attempt < self.evo_config.max_patch_attempts - 1:
+                    user_msg = (
+                        "Could not extract code from your last response. "
+                        "Please make sure to enclose the code in "
+                        "`<CODE>`...`</CODE>` tags."
+                    )
+                    msg_history = response.new_msg_history
+                else:  # last attempt
+                    break
+
+        raise ValueError(
+            "LLM failed to generate a valid initial program after "
+            f"{self.evo_config.max_patch_attempts} attempts."
+        )
+
+    def _run_generation_0(self):
+        """Setup and run generation 0 to initialize the database."""
+        initial_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0"
+        Path(initial_dir).mkdir(parents=True, exist_ok=True)
+        exec_fname = f"{initial_dir}/main.{self.lang_ext}"
+        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0/results"
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+        api_costs = 0.0
+        patch_name = "initial_program"
+        patch_description = "Initial program from file."
+        patch_type = "init"
+
+        if self.evo_config.init_program_path:
+            if self.verbose:
+                logger.info(
+                    f"Copying initial program from {self.evo_config.init_program_path}"
+                )
+            shutil.copy(self.evo_config.init_program_path, exec_fname)
+        else:
+            if self.verbose:
+                logger.info(
+                    "`init_program_path` not provided, "
+                    "generating initial program with LLM..."
+                )
+            initial_code, patch_name, patch_description, api_costs = (
+                self.generate_initial_program()
+            )
+            with open(exec_fname, "w", encoding="utf-8") as f:
+                f.write(initial_code)
+
+            if self.verbose:
+                logger.info(f"Initial program generated and saved to {exec_fname}")
+
+        # Run the evaluation synchronously
+        results, rtime = self.scheduler.run(exec_fname, results_dir)
+
+        code_embedding, e_cost = self.get_code_embedding(exec_fname)
+
+        # Read the evaluated code for database insertion
+        try:
+            evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
+            evaluated_code = ""
+
+        correct_val = False
+        metrics_val = {}
+        stdout_log = ""
+        stderr_log = ""
+        if results:
+            correct_val = results.get("correct", {}).get("correct", False)
+            metrics_val = results.get("metrics", {})
+            stdout_log = results.get("stdout_log", "")
+            stderr_log = results.get("stderr_log", "")
+
+        combined_score = metrics_val.get("combined_score", 0.0)
+        public_metrics = metrics_val.get("public", {})
+        private_metrics = metrics_val.get("private", {})
+        text_feedback = metrics_val.get("text_feedback", "")
+
+        # Add the program to the database
+        db_program = Program(
+            id=str(uuid.uuid4()),
+            code=evaluated_code,
+            language=self.evo_config.language,
+            parent_id=None,
+            generation=0,
+            archive_inspiration_ids=[],
+            top_k_inspiration_ids=[],
+            code_diff=None,
+            embedding=code_embedding,
+            correct=correct_val,
+            combined_score=combined_score,
+            public_metrics=public_metrics,
+            private_metrics=private_metrics,
+            text_feedback=text_feedback,
+            metadata={
+                "compute_time": rtime,
+                "api_costs": api_costs,
+                "embed_cost": e_cost,
+                "novelty_cost": 0.0,  # No novelty cost for generation 0
+                "patch_type": patch_type,
+                "patch_name": patch_name,
+                "patch_description": patch_description,
+                "stdout_log": stdout_log,
+                "stderr_log": stderr_log,
+            },
+        )
+
+        #ray.get(self.db.add.remote(db_program, verbose=True))
+        self.db.add(db_program, verbose=True)
+        if self.llm_selection is not None:
+            self.llm_selection.set_baseline_score(
+                db_program.combined_score if correct_val else 0.0,
+            )
+        #ray.get(self.db.save.remote())
+        self.db.save()
+        self._update_best_solution()
+
+        # Add the evaluated program to meta memory tracking
+        self.meta_summarizer.add_evaluated_program(db_program)
+
+        # Check if we should update meta memory after adding this program
+        if self.meta_summarizer.should_update_meta(self.evo_config.meta_rec_interval):
+            logger.info(
+                f"Updating meta memory after processing "
+                f"{len(self.meta_summarizer.evaluated_since_last_meta)} programs..."
+            )
+            best_program = ray.get(self.db.get_best_program.remote())
+            updated_recs, meta_cost = self.meta_summarizer.update_meta_memory(
+                best_program
+            )
+            if updated_recs:
+                # Write meta output file for generation 0
+                self.meta_summarizer.write_meta_output(str(self.results_dir))
+                # Store meta cost for tracking
+                if meta_cost > 0:
+                    logger.info(
+                        f"Meta recommendation generation cost: ${meta_cost:.4f}"
+                    )
+                    # Add meta cost to this program's metadata (the one that triggered the update)
+                    if db_program.metadata is None:
+                        db_program.metadata = {}
+                    db_program.metadata["meta_cost"] = meta_cost
+                    # Update the program in the database with the new metadata
+                    import json
+
+                    metadata_json = json.dumps(db_program.metadata)
+                    self.db.cursor.execute(
+                        "UPDATE programs SET metadata = ? WHERE id = ?",
+                        (metadata_json, db_program.id),
+                    )
+                    self.db.conn.commit()
+
+        # Save meta memory state after each job completion
+        self._save_meta_memory()
+
     def _update_completed_generations(self):
         """
         Update the count of completed generations from the database.
@@ -626,7 +1047,8 @@ class EvolutionRunner:
         have at least one program in the database. This ensures the count
         advances sequentially without gaps.
         """
-        last_gen = ray.get(self.db.get_last_iteration.remote())
+        #last_gen = ray.get(self.db.get_last_iteration.remote())
+        last_gen = self.db.get_last_iteration()
         if last_gen == -1:
             self.completed_generations = 0
             return
@@ -634,7 +1056,8 @@ class EvolutionRunner:
         # Check for contiguous generations from 0 up to last_gen
         completed_up_to = 0
         for i in range(last_gen + 1):
-            if ray.get(self.db.get_programs_by_generation.remote(i)):
+            #if ray.get(self.db.get_programs_by_generation.remote(i)):
+            if self.db.get_programs_by_generation(i):
                 completed_up_to = i + 1
             else:
                 # Found a gap, so contiguous sequence is broken
@@ -951,7 +1374,8 @@ class EvolutionRunner:
 
     def _update_best_solution(self):
         """Checks and updates the best program."""
-        best_programs = ray.get(self.db.get_top_programs.remote(n=1, correct_only=True))
+        #best_programs = ray.get(self.db.get_top_programs.remote(n=1, correct_only=True))
+        best_programs = self.db.get_top_programs(n=1, correct_only=True)
         if not best_programs:
             if self.verbose:
                 logger.debug(

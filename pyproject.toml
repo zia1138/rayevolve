@@ -32,6 +32,7 @@ dependencies = [
     "aiofiles",
     "google-generativeai",
     "ray",
+    "debugpy>=1.8.17",
 ]
 
 [project.scripts]

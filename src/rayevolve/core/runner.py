@@ -89,17 +89,456 @@ class RunningJob:
 # Set up logging
 logger = logging.getLogger(__name__)
 
-@ray.remote(num_cpus=1)
+@ray.remote
 class Worker:
-    def run(self, db: ProgramDatabase):
+    def __init__(self, 
+                 worker_id: str,
+                 results_dir: str,
+                 lang_ext: str,
+                 evo_config: EvolutionConfig, 
+                 job_config: JobConfig,
+                 db: ProgramDatabase):
+        super().__init__()
+        self.worker_id = worker_id
+        self.results_dir = results_dir
+        self.evo_config = evo_config
+        self.verbose = True
+        self.scheduler = JobScheduler(
+            job_type=evo_config.job_type,
+            config=job_config,  
+            verbose=True,
+        )        
+        self.db = db
+        self.console = Console()
+        self.prompt_sampler = PromptSampler(
+            task_sys_msg=evo_config.task_sys_msg,
+            language=evo_config.language,
+            patch_types=evo_config.patch_types,
+            patch_type_probs=evo_config.patch_type_probs,
+            use_text_feedback=evo_config.use_text_feedback,
+        )
+        self.lang_ext = lang_ext
+        self.llm_selection = None
+        self.llm = LLMClient(
+            model_names=evo_config.llm_models,
+            model_selection=self.llm_selection,
+            **evo_config.llm_kwargs,
+            verbose=False,
+        )
+
+    def _print_metadata_table(self, meta_data: dict, generation: int):
+        """Display metadata in a formatted rich table."""
+        # Create title with generation and attempt information
+        title_parts = ["[bold magenta]Patch Metadata"]
+
+        # Add generation if present
+        if generation is not None:
+            title_parts.append(
+                f" - Gen {generation}/{self.evo_config.num_generations} - Novelty: {meta_data['novelty_attempt']}/{self.evo_config.max_novelty_attempts} - Resample: {meta_data['resample_attempt']}/{self.evo_config.max_patch_resamples} - Patch: {meta_data['patch_attempt']}/{self.evo_config.max_patch_attempts}"
+            )
+
+        # Add attempt information if present
+        if all(
+            key in meta_data
+            for key in [
+                "novelty_attempt",
+                "resample_attempt",
+                "patch_attempt",
+                "generation",
+            ]
+        ):
+            title_parts.append(
+                f" (Novelty: {meta_data['novelty_attempt']}, "
+                f"Resample: {meta_data['resample_attempt']}, "
+                f"Patch: {meta_data['patch_attempt']})"
+            )
+
+        title_parts.append("[/bold magenta]")
+        table = Table(
+            title="".join(title_parts),
+            show_header=True,
+            header_style="bold cyan",
+            border_style="magenta",
+            box=rich.box.ROUNDED,
+            width=120,  # Match display.py table width
+        )
+        table.add_column("Field", style="cyan bold", no_wrap=True, width=25)
+        table.add_column("Value", style="green", overflow="fold", width=90)
+
+        # Define display order and formatting for specific fields
+        display_order = [
+            "patch_type",
+            "patch_name",
+            "patch_description",
+            "num_applied",
+            "api_costs",
+            "error_attempt",
+        ]
+
+        # Add ordered fields first
+        for field_name in display_order:
+            if field_name in meta_data:
+                value = meta_data[field_name]
+                if value is None:
+                    formatted_value = "[dim]None[/dim]"
+                elif field_name == "api_costs":
+                    formatted_value = f"${value:.4f}"
+                elif field_name == "error_attempt" and value is None:
+                    formatted_value = "[green]Success[/green]"
+                elif field_name == "error_attempt":
+                    formatted_value = (
+                        f"[red]{str(value)[:100]}...[/red]"
+                        if len(str(value)) > 100
+                        else f"[red]{value}[/red]"
+                    )
+                else:
+                    formatted_value = str(value)
+
+                table.add_row(field_name, formatted_value)
+
+        # Add remaining fields (excluding llm_result, diff_summary, and header info)
+        skip_fields = set(
+            display_order
+            + [
+                "llm_result",
+                "diff_summary",
+                "generation",
+                "novelty_attempt",
+                "resample_attempt",
+                "patch_attempt",
+            ]
+        )
+        for field_key, field_value in meta_data.items():
+            if field_key not in skip_fields:
+                if field_value is None:
+                    formatted_value = "[dim]None[/dim]"
+                else:
+                    formatted_value = (
+                        str(field_value)[:100] + "..."
+                        if len(str(field_value)) > 100
+                        else str(field_value)
+                    )
+                table.add_row(field_key, formatted_value)
+
+        # Add diff summary if available
+        if "diff_summary" in meta_data and meta_data["diff_summary"]:
+            diff_summary = meta_data["diff_summary"]
+            if isinstance(diff_summary, dict):
+                summary_text = ""
+                for k, v in diff_summary.items():
+                    summary_text += f"{k}: {v}; "
+                table.add_row("diff_summary", summary_text.strip())
+            else:
+                table.add_row("diff_summary", str(diff_summary)[:200])
+
+        self.console.print(table)
+
+    def run_patch(
+        self,
+        parent_program: Program,
+        archive_programs: List[Program],
+        top_k_programs: List[Program],
+        generation: int,
+        novelty_attempt: int = 1,
+        resample_attempt: int = 1,
+    ) -> tuple[Optional[str], dict, int]:
+        """Run patch generation for a specific generation."""
+        max_patch_attempts = self.evo_config.max_patch_attempts
+        if self.verbose:
+            logger.info(
+                f"Edit Cycle {generation} -> {generation + 1}, "
+                f"Max Patch Attempts: {max_patch_attempts}"
+            )
+        # Get current meta recommendations
+        # meta_recs, _, _ = self.meta_summarizer.get_current() 
+        meta_recs = None
+        # Construct edit / code change message
+        patch_sys, patch_msg, patch_type = self.prompt_sampler.sample(
+            parent=parent_program,
+            archive_inspirations=archive_programs,
+            top_k_inspirations=top_k_programs,
+            meta_recommendations=meta_recs,
+        )
+
+        if patch_type in ["full", "cross"]:
+            apply_patch = apply_full_patch
+        elif patch_type == "diff":
+            apply_patch = apply_diff_patch
+        elif patch_type == "paper":
+            raise NotImplementedError("Paper edit not implemented.")
+            # apply_patch = apply_paper_patch
+        else:
+            raise ValueError(f"Invalid patch type: {patch_type}")
+
+        total_costs = 0
+        msg_history = []
+        llm_kwargs = self.llm.get_kwargs()
+        #if self.llm_selection is not None:
+        #    model_name = llm_kwargs["model_name"]
+        #    self.llm_selection.update_submitted(model_name)
+        code_diff = None  # Initialize code_diff
+        num_applied_attempt = 0  # Initialize num_applied_attempt
+        error_attempt = (
+            "Max attempts reached without successful patch."  # Default error
+        )
+        patch_name = None
+        patch_description = None
+        output_path_attempt = None
+        patch_txt_attempt = None
+        patch_path = None
+        diff_summary = {}
+
+        for patch_attempt in range(max_patch_attempts):
+            if "max_tokens" in llm_kwargs:
+                del llm_kwargs["max_tokens"]
+            response = self.llm.query(
+                msg=patch_msg,
+                system_msg=patch_sys,
+                msg_history=msg_history,
+                llm_kwargs=llm_kwargs,
+            )
+            # print(response.content)
+            if response is None or response.content is None:
+                if self.verbose:
+                    logger.info(
+                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} FAILURE. "
+                        f"Error: LLM response content was None."
+                    )
+                # Prepare for next attempt or exit
+                error_attempt = "LLM response content was None."
+                num_applied_attempt = 0
+                patch_txt_attempt = None
+                if patch_attempt < max_patch_attempts - 1:
+                    patch_msg = (
+                        "The previous attempt to get an edit was not "
+                        "successful because the LLM response was empty. "
+                        "Try again."
+                    )
+                    if response:
+                        msg_history = response.new_msg_history
+                    continue
+                else:  # Last attempt
+                    break
+
+            total_costs += response.cost  # Acc. cost
+            patch_name = extract_between(
+                response.content,
+                "<NAME>",
+                "</NAME>",
+                False,
+            )
+            patch_description = extract_between(
+                response.content,
+                "<DESCRIPTION>",
+                "</DESCRIPTION>",
+                False,
+            )
+
+            # Apply the code patch (diff/full rewrite)
+            (
+                _,
+                num_applied_attempt,
+                output_path_attempt,
+                error_attempt,
+                patch_txt_attempt,
+                patch_path,
+            ) = apply_patch(
+                original_str=parent_program.code,
+                patch_str=response.content,
+                patch_dir=f"{self.results_dir}/{FOLDER_PREFIX}_{generation}",
+                language=self.evo_config.language,
+                verbose=False,
+            )
+
+            if error_attempt is None and num_applied_attempt > 0:
+                if patch_path:  # Ensure patch_path is not None
+                    diff_summary = summarize_diff(
+                        str(patch_path)
+                    )  # Convert Path to str
+                if self.verbose:
+                    logger.info(
+                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} SUCCESS. "
+                        f"Output: {output_path_attempt}, "
+                        f"Patches Applied: {num_applied_attempt}."
+                    )
+
+                code_diff = patch_txt_attempt
+                break  # Break from patch attempts
+            else:
+                error_str = (
+                    str(error_attempt) if error_attempt else "No changes applied."
+                )
+                patch_msg = (
+                    "The previous edit was not successful."
+                    + " This was the error message: \n\n"
+                    + error_str
+                    + "\n\n Try again."
+                )
+                if self.verbose:
+                    logger.info(
+                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} FAILURE. "
+                        f"Error: '{error_str}', "
+                        f"Patches Applied: {num_applied_attempt}."
+                    )
+                msg_history = response.new_msg_history
+                code_diff = None
+                if patch_attempt == max_patch_attempts - 1:  # Last attempt failed
+                    # error_attempt is already set from apply_patch or default
+                    pass
+
+        # Only consider the diff summary for the original source file
+        original_filename = f"original.{self.lang_ext}"
+        if original_filename in diff_summary:
+            diff_summary = diff_summary[original_filename]
+
+        meta_edit_data = {
+            "patch_type": patch_type,
+            "api_costs": total_costs,
+            "num_applied": num_applied_attempt,
+            "patch_name": patch_name,
+            "patch_description": patch_description,
+            "error_attempt": error_attempt,
+            "novelty_attempt": novelty_attempt,
+            "resample_attempt": resample_attempt,
+            "patch_attempt": patch_attempt + 1,
+            **llm_kwargs,
+            "llm_result": response.to_dict() if response else None,
+            "diff_summary": diff_summary,
+        }
+        if self.verbose and num_applied_attempt > 0:
+            self._print_metadata_table(meta_edit_data, generation)
+        # Delete generation from meta_edit_data
+        return code_diff, meta_edit_data, num_applied_attempt
+
+    def run(self):
+        current_gen = 1
         while True:
-            item = work_q.get()  # blocks until something arrives
-            if item == "__DONE__":
-                break
-            # sample to get parent_program, archive_programs, top_k_programs,
-            # run patch to get changes (llm call)
-            # run the job
-            # add new program to database (populates the work queue?)
+            # Loop, sample, run patch, submit job
+            # add to database, keep looping until limit
+            #current_gen = self.next_generation_to_submit
+            #self.next_generation_to_submit += 1
+            exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{self.worker_id}_{current_gen}/main.{self.lang_ext}"
+            results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{self.worker_id}_{current_gen}/results"
+            Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+            api_costs = 0
+            embed_cost = 0
+            novelty_cost = 0.0
+            # Loop over patch resamples - including parents
+            for resample in range(self.evo_config.max_patch_resamples):
+                (
+                    parent_program,
+                    archive_programs,
+                    top_k_programs,
+                ) = ray.get(self.db.sample.remote(
+                    target_generation=current_gen,
+                    novelty_attempt=1,
+                    max_novelty_attempts=self.evo_config.max_novelty_attempts,
+                    resample_attempt=resample + 1,
+                    max_resample_attempts=self.evo_config.max_patch_resamples,
+                ))
+                archive_insp_ids = [p.id for p in archive_programs]
+                top_k_insp_ids = [p.id for p in top_k_programs]
+                parent_id = parent_program.id
+                # Run patch (until success with max attempts)
+                code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
+                    parent_program,
+                    archive_programs,
+                    top_k_programs,
+                    current_gen,
+                    novelty_attempt=1,
+                    resample_attempt=resample + 1,
+                )
+                api_costs += meta_patch_data["api_costs"]
+                if (
+                    meta_patch_data["error_attempt"] is None
+                    and num_applied_attempt > 0
+                ):
+                    meta_patch_data["api_costs"] = api_costs
+                    break
+
+            # # Get the code embedding for the evaluated code
+            # code_embedding, e_cost = self.get_code_embedding(exec_fname)
+            # embed_cost += e_cost
+
+            # # Submit the job (runs it sync not async with local sync scheduler)
+            # job_id = self.scheduler.submit_async(exec_fname, results_dir)
+
+            # # Add to running jobs queue
+            # running_job = RunningJob(
+            #     job_id=job_id,
+            #     exec_fname=exec_fname,
+            #     results_dir=results_dir,
+            #     start_time=time.time(),
+            #     generation=current_gen,
+            #     parent_id=parent_id,
+            #     archive_insp_ids=archive_insp_ids,
+            #     top_k_insp_ids=top_k_insp_ids,
+            #     code_diff=code_diff,
+            #     meta_patch_data=meta_patch_data,
+            #     code_embedding=code_embedding,
+            #     embed_cost=embed_cost,
+            #     novelty_cost=novelty_cost,
+            # )
+
+            # # Next add to database.
+            # end_time = time.time()
+            # rtime = end_time - job.start_time
+            # results = self.scheduler.get_job_results(job.job_id, job.results_dir)
+
+            # # Read the evaluated code
+            # evaluated_code = Path(job.exec_fname).read_text(encoding="utf-8")
+
+            # # Use pre-computed embedding and novelty costs
+            # code_embedding = job.code_embedding
+            # e_cost = job.embed_cost
+            # n_cost = job.novelty_cost
+
+            # correct_val = False
+            # metrics_val = {}
+            # stdout_log = ""
+            # stderr_log = ""
+            # if results:
+            #     correct_val = results.get("correct", {}).get("correct", False)
+            #     metrics_val = results.get("metrics", {})
+            #     stdout_log = results.get("stdout_log", "")
+            #     stderr_log = results.get("stderr_log", "")
+
+            # combined_score = metrics_val.get("combined_score", 0.0)
+            # public_metrics = metrics_val.get("public", {})
+            # private_metrics = metrics_val.get("private", {})
+            # text_feedback = metrics_val.get("text_feedback", "")
+
+            # # Add the program to the database
+            # db_program = Program(
+            #     id=str(uuid.uuid4()),
+            #     code=evaluated_code,
+            #     language=self.evo_config.language,
+            #     parent_id=job.parent_id,
+            #     generation=job.generation,
+            #     archive_inspiration_ids=job.archive_insp_ids,
+            #     top_k_inspiration_ids=job.top_k_insp_ids,
+            #     code_diff=job.code_diff,
+            #     embedding=code_embedding,
+            #     correct=correct_val,
+            #     combined_score=combined_score,
+            #     public_metrics=public_metrics,
+            #     private_metrics=private_metrics,
+            #     text_feedback=text_feedback,
+            #     metadata={
+            #         "compute_time": rtime,
+            #         **(job.meta_patch_data or {}),
+            #         "embed_cost": e_cost,
+            #         "novelty_cost": n_cost,
+            #         "stdout_log": stdout_log,
+            #         "stderr_log": stderr_log,
+            #     },
+            # )
+            # #ray.get(self.db.add.remote(db_program, verbose=True))
+            # #ray.get(self.db.save.remote())
+            # self.db.add(db_program, verbose=True)
+            # self.db.save()       
+            # self._update_best_solution()
 
 class EvolutionRunner:
     def __init__(
@@ -307,210 +746,10 @@ class EvolutionRunner:
 
         logger.info(f"Experiment configuration saved to {config_path}")
 
-    def _run_generation_0_simplified(self):
-        initial_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0"
-        Path(initial_dir).mkdir(parents=True, exist_ok=True)
-        exec_fname = f"{initial_dir}/main.{self.lang_ext}"
-        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0/results"
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
-
-        api_costs = 0.0
-        patch_name = "initial_program"
-        patch_description = "Initial program from file."
-        patch_type = "init"
-
-        shutil.copy(self.evo_config.init_program_path, exec_fname)
-        results, rtime = self.scheduler.run(exec_fname, results_dir)
-        code_embedding, e_cost = self.get_code_embedding(exec_fname)
-
-        evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
-
-        correct_val = results.get("correct", {}).get("correct", False)
-        metrics_val = results.get("metrics", {})
-        stdout_log = results.get("stdout_log", "")
-        stderr_log = results.get("stderr_log", "")
-
-        combined_score = metrics_val.get("combined_score", 0.0)
-        public_metrics = metrics_val.get("public", {})
-        private_metrics = metrics_val.get("private", {})
-        text_feedback = metrics_val.get("text_feedback", "")
-
-        # Add the program to the database
-        db_program = Program(
-            id=str(uuid.uuid4()),
-            code=evaluated_code,
-            language=self.evo_config.language,
-            parent_id=None,
-            generation=0,
-            archive_inspiration_ids=[],
-            top_k_inspiration_ids=[],
-            code_diff=None,
-            embedding=code_embedding,
-            correct=correct_val,
-            combined_score=combined_score,
-            public_metrics=public_metrics,
-            private_metrics=private_metrics,
-            text_feedback=text_feedback,
-            metadata={
-                "compute_time": rtime,
-                "api_costs": api_costs,
-                "embed_cost": e_cost,
-                "novelty_cost": 0.0,  # No novelty cost for generation 0
-                "patch_type": patch_type,
-                "patch_name": patch_name,
-                "patch_description": patch_description,
-                "stdout_log": stdout_log,
-                "stderr_log": stderr_log,
-            },
-        )
-        ray.get(self.db.add.remote(db_program, verbose=True))
-        ray.get(self.db.save.remote())
-
-    def _submit_new_job_simplified(self):
-        """1. call LLM and patch to generate new program
-        2. submit and run the job
-        """
-        current_gen = self.next_generation_to_submit
-        self.next_generation_to_submit += 1
-        exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
-        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
-
-        api_costs = 0
-        embed_cost = 0
-        novelty_cost = 0.0
-        # Loop over patch resamples - including parents
-        for resample in range(self.evo_config.max_patch_resamples):
-            (
-                parent_program,
-                archive_programs,
-                top_k_programs,
-            ) = self.db.sample( #ray.get(self.db.sample.remote(
-                target_generation=current_gen,
-                novelty_attempt=1,
-                max_novelty_attempts=self.evo_config.max_novelty_attempts,
-                resample_attempt=resample + 1,
-                max_resample_attempts=self.evo_config.max_patch_resamples,
-            )
-            archive_insp_ids = [p.id for p in archive_programs]
-            top_k_insp_ids = [p.id for p in top_k_programs]
-            parent_id = parent_program.id
-            # Run patch (until success with max attempts)
-            code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
-                parent_program,
-                archive_programs,
-                top_k_programs,
-                current_gen,
-                novelty_attempt=1,
-                resample_attempt=resample + 1,
-            )
-            api_costs += meta_patch_data["api_costs"]
-            if (
-                meta_patch_data["error_attempt"] is None
-                and num_applied_attempt > 0
-            ):
-                meta_patch_data["api_costs"] = api_costs
-                break
-
-        # Get the code embedding for the evaluated code
-        code_embedding, e_cost = self.get_code_embedding(exec_fname)
-        embed_cost += e_cost
-
-        # Submit the job (runs it sync not async with local sync scheduler)
-        job_id = self.scheduler.submit_async(exec_fname, results_dir)
-
-        # Add to running jobs queue
-        running_job = RunningJob(
-            job_id=job_id,
-            exec_fname=exec_fname,
-            results_dir=results_dir,
-            start_time=time.time(),
-            generation=current_gen,
-            parent_id=parent_id,
-            archive_insp_ids=archive_insp_ids,
-            top_k_insp_ids=top_k_insp_ids,
-            code_diff=code_diff,
-            meta_patch_data=meta_patch_data,
-            code_embedding=code_embedding,
-            embed_cost=embed_cost,
-            novelty_cost=novelty_cost,
-        )
-        
-        return running_job
-        
-    def _process_completed_job_simplified(self, job: RunningJob):
-        """ add result to database and update bast solution """
-        end_time = time.time()
-        rtime = end_time - job.start_time
-        results = self.scheduler.get_job_results(job.job_id, job.results_dir)
-
-        # Read the evaluated code
-        evaluated_code = Path(job.exec_fname).read_text(encoding="utf-8")
-
-        # Use pre-computed embedding and novelty costs
-        code_embedding = job.code_embedding
-        e_cost = job.embed_cost
-        n_cost = job.novelty_cost
-
-        correct_val = False
-        metrics_val = {}
-        stdout_log = ""
-        stderr_log = ""
-        if results:
-            correct_val = results.get("correct", {}).get("correct", False)
-            metrics_val = results.get("metrics", {})
-            stdout_log = results.get("stdout_log", "")
-            stderr_log = results.get("stderr_log", "")
-
-        combined_score = metrics_val.get("combined_score", 0.0)
-        public_metrics = metrics_val.get("public", {})
-        private_metrics = metrics_val.get("private", {})
-        text_feedback = metrics_val.get("text_feedback", "")
-
-        # Add the program to the database
-        db_program = Program(
-            id=str(uuid.uuid4()),
-            code=evaluated_code,
-            language=self.evo_config.language,
-            parent_id=job.parent_id,
-            generation=job.generation,
-            archive_inspiration_ids=job.archive_insp_ids,
-            top_k_inspiration_ids=job.top_k_insp_ids,
-            code_diff=job.code_diff,
-            embedding=code_embedding,
-            correct=correct_val,
-            combined_score=combined_score,
-            public_metrics=public_metrics,
-            private_metrics=private_metrics,
-            text_feedback=text_feedback,
-            metadata={
-                "compute_time": rtime,
-                **(job.meta_patch_data or {}),
-                "embed_cost": e_cost,
-                "novelty_cost": n_cost,
-                "stdout_log": stdout_log,
-                "stderr_log": stderr_log,
-            },
-        )
-        #ray.get(self.db.add.remote(db_program, verbose=True))
-        #ray.get(self.db.save.remote())
-        self.db.add(db_program, verbose=True)
-        self.db.save()       
-        self._update_best_solution()
-
-
-    def run_simplified(self):
-        self._run_generation_0_simplified()
-        self.next_generation_to_submit = 1
-        for i in range(1, self.evo_config.num_generations):
-            job = self._submit_new_job_simplified()
-            self._process_completed_job_simplified(job)
-            self._update_completed_generations()
-
     def run_ray(self):
         self._run_generation_0()
-        workers = [Worker.remote() for _ in range(2)]
-        tasks = [w.run.remote(self.db) for w in workers]
+        workers = [Worker.remote(str(id),self.results_dir, self.lang_ext, self.evo_config, self.job_config, self.db) for id in range(8)]
+        tasks = [w.run.remote() for w in workers]
         ray.get(tasks)
 
     def run(self):

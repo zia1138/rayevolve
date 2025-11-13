@@ -168,7 +168,6 @@ class EvolutionRunner:
         embedding_model_to_use = (
             evo_config.embedding_model or "text-embedding-3-small"
         )
-        
         self.work_q = Queue()
         self.db = ProgramDatabase.remote(
             config=db_config, embedding_model=embedding_model_to_use,
@@ -509,12 +508,7 @@ class EvolutionRunner:
             self._update_completed_generations()
 
     def run_ray(self):
-
-        self._run_generation_0_simplified()
-
-
-    frontier = Frontier.remote(roots=roots, work_q=work_q)
-    worker   = SingleWorker.remote()
+        worker   = SingleWorker.remote()
 
     result = ray.get(worker.run.remote(frontier, work_q))
     print("[done]", result)

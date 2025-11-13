@@ -347,6 +347,13 @@ class ProgramDatabase:
         else:
             return self.island_manager.are_all_islands_initialized()
 
+    def set_WAL_mode(self):
+        if self.cursor:
+            self.cursor.execute(
+                "PRAGMA busy_timeout = 10000;"
+            )  # 10 second timeout
+            self.cursor.execute("PRAGMA journal_mode = WAL;")  # Ensure WAL mode
+            
     # End Additional functions -------
 
     def _create_tables(self):

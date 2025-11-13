@@ -25,7 +25,8 @@ import webbrowser
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
-from rayevolve.database_orig import DatabaseConfig, ProgramDatabase
+import ray
+from rayevolve.database import DatabaseConfig, ProgramDatabase
 
 # We'll use a simple text-to-PDF approach instead of complex dependencies
 WEASYPRINT_AVAILABLE = False
@@ -183,16 +184,17 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
             db = None
             try:
                 config = DatabaseConfig(db_path=abs_db_path)
-                db = ProgramDatabase(config, read_only=True)
+                db = ProgramDatabase.remote(config, read_only=True)
 
                 # Set WAL mode compatible settings for read-only connections
-                if db.cursor:
-                    db.cursor.execute(
-                        "PRAGMA busy_timeout = 10000;"
-                    )  # 10 second timeout
-                    db.cursor.execute("PRAGMA journal_mode = WAL;")  # Ensure WAL mode
+                #if db.cursor:
+                #    db.cursor.execute(
+                #        "PRAGMA busy_timeout = 10000;"
+                #    )  # 10 second timeout
+                #    db.cursor.execute("PRAGMA journal_mode = WAL;")  # Ensure WAL mode                
+                ray.get(db.set_WAL_mode.remote())
 
-                programs = db.get_all_programs()
+                programs = ray.get(db.get_all_programs.remote())
 
                 # Convert Program objects to dicts for JSON
                 programs_dict = [p.to_dict() for p in programs]

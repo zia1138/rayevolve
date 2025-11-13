@@ -243,7 +243,7 @@ class Program:
 
         return cls(**filtered_data)
 
-#@ray.remote
+@ray.remote
 class ProgramDatabase:
     """
     SQLite-backedi database for storing and managing programs during an

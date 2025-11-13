@@ -1,3 +1,4 @@
+from asyncio import tasks
 import shutil
 import sys
 import uuid
@@ -13,15 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
-
-# ray imports
 import ray
-from ray.util.queue import Queue
-
 import asyncio
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
-#from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
-from rayevolve.ray_database import ProgramDatabase, DatabaseConfig, Program
+from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
 from rayevolve.llm import (
     LLMClient,
     extract_between,
@@ -93,7 +89,17 @@ class RunningJob:
 # Set up logging
 logger = logging.getLogger(__name__)
 
-
+@ray.remote(num_cpus=1)
+class Worker:
+    def run(self, db: ProgramDatabase):
+        while True:
+            item = work_q.get()  # blocks until something arrives
+            if item == "__DONE__":
+                break
+            # sample to get parent_program, archive_programs, top_k_programs,
+            # run patch to get changes (llm call)
+            # run the job
+            # add new program to database (populates the work queue?)
 
 class EvolutionRunner:
     def __init__(
@@ -168,10 +174,8 @@ class EvolutionRunner:
         embedding_model_to_use = (
             evo_config.embedding_model or "text-embedding-3-small"
         )
-        self.work_q = Queue()
         self.db = ProgramDatabase.remote(
-            config=db_config, embedding_model=embedding_model_to_use,
-            work_q = self.work_q
+            config=db_config, embedding_model=embedding_model_to_use
         )
         #self.db = ProgramDatabase(
         #    config=db_config, embedding_model=embedding_model_to_use
@@ -260,8 +264,7 @@ class EvolutionRunner:
         self.next_generation_to_submit = 0
 
         if resuming_run:
-            #self.completed_generations = ray.get(self.db.get_last_iteration.remote()) + 1
-            self.completed_generations = self.db.get_last_iteration() + 1
+            self.completed_generations = ray.get(self.db.get_last_iteration.remote()) + 1
             self.next_generation_to_submit = self.completed_generations
             logger.info("=" * 80)
             logger.info("RESUMING PREVIOUS EVOLUTION RUN")
@@ -360,11 +363,8 @@ class EvolutionRunner:
                 "stderr_log": stderr_log,
             },
         )
-        #ray.get(self.db.add.remote(db_program, verbose=True))
-        #ray.get(self.db.save.remote())
-        self.db.add(db_program, verbose=True)
-        self.db.save()
-        self._update_best_solution()
+        ray.get(self.db.add.remote(db_program, verbose=True))
+        ray.get(self.db.save.remote())
 
     def _submit_new_job_simplified(self):
         """1. call LLM and patch to generate new program
@@ -508,20 +508,10 @@ class EvolutionRunner:
             self._update_completed_generations()
 
     def run_ray(self):
-        worker   = SingleWorker.remote()
-
-    result = ray.get(worker.run.remote(frontier, work_q))
-    print("[done]", result)
-
-
-        #roots = [f"root-{i}" for i in range(SEED_ITEMS)]
-        #notifier = Notifier.remote()
-        #self.db.set_notifier.remote(notifier)
-
-        #workers   = [ShinkaWorker.remote() for _ in range(N_WORKERS)]
-        #tasks = [w.run.remote(self.db, notifier) for w in workers]
-
-        #results = ray.get(tasks)
+        self._run_generation_0()
+        workers = [Worker.remote() for _ in range(2)]
+        tasks = [w.run.remote(self.db) for w in workers]
+        ray.get(tasks)
 
     def run(self):
         """Run evolution with parallel job queue."""
@@ -778,14 +768,14 @@ class EvolutionRunner:
             },
         )
 
-        #ray.get(self.db.add.remote(db_program, verbose=True))
-        self.db.add(db_program, verbose=True)
+        ray.get(self.db.add.remote(db_program, verbose=True))
+        # self.db.add(db_program, verbose=True)
         if self.llm_selection is not None:
             self.llm_selection.set_baseline_score(
                 db_program.combined_score if correct_val else 0.0,
             )
-        #ray.get(self.db.save.remote())
-        self.db.save()
+        ray.get(self.db.save.remote())
+        #self.db.save()
         self._update_best_solution()
 
         # Add the evaluated program to meta memory tracking
@@ -1161,8 +1151,8 @@ class EvolutionRunner:
 
     def _update_best_solution(self):
         """Checks and updates the best program."""
-        #best_programs = ray.get(self.db.get_top_programs.remote(n=1, correct_only=True))
-        best_programs = self.db.get_top_programs(n=1, correct_only=True)
+        best_programs = ray.get(self.db.get_top_programs.remote(n=1, correct_only=True))
+        #best_programs = self.db.get_top_programs(n=1, correct_only=True)
         if not best_programs:
             if self.verbose:
                 logger.debug(

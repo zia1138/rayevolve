@@ -13,11 +13,15 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
-#import ray
+
+# ray imports
+import ray
+from ray.util.queue import Queue
+
 import asyncio
-from ray_ideas.raytree import SEED_ITEMS
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
-from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
+#from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
+from rayevolve.ray_database import ProgramDatabase, DatabaseConfig, Program
 from rayevolve.llm import (
     LLMClient,
     extract_between,
@@ -164,12 +168,15 @@ class EvolutionRunner:
         embedding_model_to_use = (
             evo_config.embedding_model or "text-embedding-3-small"
         )
-        #self.db = ProgramDatabase.remote(
+        
+        self.work_q = Queue()
+        self.db = ProgramDatabase.remote(
+            config=db_config, embedding_model=embedding_model_to_use,
+            work_q = self.work_q
+        )
+        #self.db = ProgramDatabase(
         #    config=db_config, embedding_model=embedding_model_to_use
-        #)
-        self.db = ProgramDatabase(
-            config=db_config, embedding_model=embedding_model_to_use
-        )        
+        #)        
         self.scheduler = JobScheduler(
             job_type=evo_config.job_type,
             config=job_config,  # type: ignore
@@ -502,7 +509,16 @@ class EvolutionRunner:
             self._update_completed_generations()
 
     def run_ray(self):
+
         self._run_generation_0_simplified()
+
+
+    frontier = Frontier.remote(roots=roots, work_q=work_q)
+    worker   = SingleWorker.remote()
+
+    result = ray.get(worker.run.remote(frontier, work_q))
+    print("[done]", result)
+
 
         #roots = [f"root-{i}" for i in range(SEED_ITEMS)]
         #notifier = Notifier.remote()
@@ -787,7 +803,8 @@ class EvolutionRunner:
                 f"Updating meta memory after processing "
                 f"{len(self.meta_summarizer.evaluated_since_last_meta)} programs..."
             )
-            best_program = ray.get(self.db.get_best_program.remote())
+            #best_program = ray.get(self.db.get_best_program.remote())
+            best_program = self.db.get_best_program.remote()
             updated_recs, meta_cost = self.meta_summarizer.update_meta_memory(
                 best_program
             )

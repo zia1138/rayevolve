@@ -455,16 +455,15 @@ class Worker:
         return code_embedding, e_cost
     
     def run(self):
-        current_gen = 1
+        current_gen = 0
         while True:
             # Loop, sample, run patch, submit job
             # add to database, keep looping until limit
             #current_gen = self.next_generation_to_submit
             #self.next_generation_to_submit += 1
+            current_gen += 1
             exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{self.worker_id}_{current_gen}/main.{self.lang_ext}"
             results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{self.worker_id}_{current_gen}/results"
-
-            #patch_dir=f"{self.results_dir}/{FOLDER_PREFIX}_{generation}"
             patch_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{self.worker_id}_{current_gen}"
             Path(results_dir).mkdir(parents=True, exist_ok=True)
 
@@ -584,8 +583,6 @@ class Worker:
             )
             ray.get(self.db.add.remote(db_program, verbose=True))
             ray.get(self.db.save.remote())
-            #self.db.add(db_program, verbose=True)
-            #self.db.save()       
             #self._update_best_solution() # <- need to look at what this does
 
 class EvolutionRunner:
@@ -795,8 +792,9 @@ class EvolutionRunner:
         logger.info(f"Experiment configuration saved to {config_path}")
 
     def run_ray(self):
+        """Ray based evolution."""
         self._run_generation_0()
-        workers = [Worker.remote(str(id),self.results_dir, self.lang_ext, self.evo_config, self.job_config, self.db) for id in range(1)]
+        workers = [Worker.remote(str(id),self.results_dir, self.lang_ext, self.evo_config, self.job_config, self.db) for id in range(8)]
         tasks = [w.run.remote() for w in workers]
         ray.get(tasks)
 

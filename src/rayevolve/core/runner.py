@@ -97,7 +97,8 @@ class Worker:
                  lang_ext: str,
                  evo_config: EvolutionConfig, 
                  job_config: JobConfig,
-                 db: ProgramDatabase):
+                 db: ProgramDatabase,
+                 model: str):
         super().__init__()
         self.worker_id = worker_id
         self.results_dir = results_dir
@@ -120,7 +121,8 @@ class Worker:
         self.lang_ext = lang_ext
         self.llm_selection = None
         self.llm = LLMClient(
-            model_names=evo_config.llm_models,
+            #model_names=evo_config.llm_models,  # temp hack to handle an input model
+            model_names=[model],
             model_selection=self.llm_selection,
             **evo_config.llm_kwargs,
             verbose=False,
@@ -129,6 +131,7 @@ class Worker:
             model_name=evo_config.embedding_model,
             verbose=self.verbose,
         )
+        self.model = model
 
     def _print_metadata_table(self, meta_data: dict, generation: int):
         """Display metadata in a formatted rich table."""
@@ -264,7 +267,7 @@ class Worker:
             top_k_inspirations=top_k_programs,
             meta_recommendations=meta_recs,
         )
-
+        
         if patch_type in ["full", "cross"]:
             apply_patch = apply_full_patch
         elif patch_type == "diff":
@@ -296,13 +299,16 @@ class Worker:
         for patch_attempt in range(max_patch_attempts):
             if "max_tokens" in llm_kwargs:
                 del llm_kwargs["max_tokens"]
+            if "max_output_tokens" in llm_kwargs:
+                del llm_kwargs["max_output_tokens"]
+            print("llm query")
             response = self.llm.query(
                 msg=patch_msg,
                 system_msg=patch_sys,
                 msg_history=msg_history,
                 llm_kwargs=llm_kwargs,
             )
-            # print(response.content)
+            print("llm query done")
             if response is None or response.content is None:
                 if self.verbose:
                     logger.info(
@@ -457,8 +463,7 @@ class Worker:
     def run(self):
         current_gen = 0
         while True:
-            # Loop, sample, run patch, submit job
-            # add to database, keep looping until limit
+            # Loop, sample, run patch, submit job add to database, keep looping until some limit
             #current_gen = self.next_generation_to_submit
             #self.next_generation_to_submit += 1
             current_gen += 1
@@ -794,7 +799,11 @@ class EvolutionRunner:
     def run_ray(self):
         """Ray based evolution."""
         self._run_generation_0()
-        workers = [Worker.remote(str(id),self.results_dir, self.lang_ext, self.evo_config, self.job_config, self.db) for id in range(8)]
+
+        workers = []
+        for model in self.evo_config.llm_models: # multiple workers per model
+            workers.extend([Worker.remote(str(id),self.results_dir, self.lang_ext, self.evo_config, self.job_config, self.db, model) for id in range(5)])
+
         tasks = [w.run.remote() for w in workers]
         ray.get(tasks)
 

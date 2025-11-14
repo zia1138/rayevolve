@@ -9,3 +9,8 @@ You can run the circle packing example as follows:
 You can visualize the progress as follows:
 `python -m rayevolve.webui.visualization --db results/rayevolve_circle_packing/[current run]/evolution_db.sqlite`
 
+
+# TODO
+
+- need to correctly handle generation counter
+- add improved mata-analyzer

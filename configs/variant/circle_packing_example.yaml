@@ -1,5 +1,5 @@
 defaults:
-  - override /database@_global_: island_small
+  - override /database@_global_: island_large
   - override /evolution@_global_: small_budget
   - override /task@_global_: circle_packing
   - override /cluster@_global_: local

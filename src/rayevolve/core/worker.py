@@ -37,6 +37,8 @@ from rayevolve.core.summarizer import MetaSummarizer
 from rayevolve.core.novelty_judge import NoveltyJudge
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 
+import debugpy
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +69,7 @@ class EvoWorker:
                  job_config: JobConfig,
                  db: ProgramDatabase,
                  model: str):
-        super().__init__()
+        super().__init__()  
         self.worker_id = worker_id
         self.gen = gen
         self.results_dir = results_dir
@@ -430,6 +432,9 @@ class EvoWorker:
         return code_embedding, e_cost
     
     def run(self):
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()
         while True:
             # Loop, sample, run patch, submit job add to database, keep looping until some limit
             current_gen = ray.get(self.gen.next.remote())

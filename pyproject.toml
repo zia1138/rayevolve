@@ -31,8 +31,8 @@ dependencies = [
     "markdown",
     "aiofiles",
     "google-generativeai",
-    "ray",
-    "debugpy>=1.8.17",
+    "ray[default]>=2.9.1",
+    "debugpy>=1.8.0",
 ]
 
 [project.scripts]

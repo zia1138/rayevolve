@@ -20,12 +20,11 @@ def main(cfg: DictConfig):
     db_cfg = hydra.utils.instantiate(cfg.db_config)
     evo_cfg = hydra.utils.instantiate(cfg.evo_config)
 
-    ray.init()
-        #address="127.0.0.1:6666",
-        #runtime_env={
-        #    "env_vars": {"RAY_DEBUG_POST_MORTEM": "1"},
-        #}
-    #)
+    ray.init(
+        runtime_env={
+            "env_vars": {"RAY_DEBUG": "1", "RAY_DEBUG_POST_MORTEM": "1"}
+        }
+    )
     evo_runner = EvolutionRunner(
         evo_config=evo_cfg,
         job_config=job_cfg,

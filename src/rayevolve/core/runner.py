@@ -171,6 +171,7 @@ class EvolutionRunner:
         )
 
         # Initialize MetaSummarizer for meta-recommendations
+        # NOTE: Stores state, needs to be a ray actor.
         self.meta_summarizer = MetaSummarizer(
             meta_llm_client=self.meta_llm,
             language=evo_config.language,
@@ -254,7 +255,7 @@ class EvolutionRunner:
         """Ray based evolution."""
         self._run_generation_0()
 
-        gen = EvoGen.remote()
+        gen = EvoGen.remote() # generation counter
         workers = []
         for model in self.evo_config.llm_models: # multiple workers per model
             workers.extend([EvoWorker.remote(str(id), gen, self.results_dir, self.lang_ext, self.evo_config, self.job_config, self.db, model) for id in range(5)])

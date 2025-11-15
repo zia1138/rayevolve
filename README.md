@@ -52,4 +52,18 @@ and https://code.visualstudio.com/docs/python/debugging#_debugging-by-attaching-
 
 # TODO
 
-- add improved mata-analyzer
+Add to the EvoWorker
+- meta-analyzer (has state, so likely a RayActor)
+- novelty check
+- LLM selection with UCB
+
+Evals
+- replicate circle packing result (2.6x)
+- get other examples from openevolve into framework
+- identify other evals to go after, MLE-bench, ALE-bench, etc.
+
+Ideas
+- switch to codex (headless) or pydantic-ai for evolution
+- incorporate more feedback into new program construction
+- switch to modal for program eval (if not local)
+

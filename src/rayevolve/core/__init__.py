@@ -1,4 +1,5 @@
-from .runner import EvolutionRunner, EvolutionConfig
+from .runner import EvolutionRunner
+from .common import EvolutionConfig
 from .sampler import PromptSampler
 from .summarizer import MetaSummarizer
 from .novelty_judge import NoveltyJudge

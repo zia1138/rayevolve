@@ -12,7 +12,7 @@ evo_config:
   max_parallel_jobs: 5
   max_patch_resamples: 3
   max_patch_attempts: 3
-  meta_rec_interval: 1. # testing
+  meta_rec_interval: 10 # testing
   meta_max_recommendations: 5
   embedding_model: "text-embedding-3-small"
   max_novelty_attempts: 3 

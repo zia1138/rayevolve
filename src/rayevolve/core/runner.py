@@ -37,6 +37,7 @@ from rayevolve.core.sampler import PromptSampler
 from rayevolve.core.summarizer import MetaSummarizer
 from rayevolve.core.novelty_judge import NoveltyJudge
 
+import debugpy
 FOLDER_PREFIX = "gen"
 
 
@@ -50,7 +51,7 @@ class EvolutionRunner:
         evo_config: EvolutionConfig,
         job_config: JobConfig,
         db_config: DatabaseConfig,
-        verbose: bool = True,
+        verbose: bool = False,
     ):
         self.evo_config = evo_config
         self.job_config = job_config
@@ -458,6 +459,10 @@ class EvolutionRunner:
         # Add the evaluated program to meta memory tracking
         ray.get(self.meta_summarizer.add_evaluated_program.remote(db_program))
 
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()  
+
         # Check if we should update meta memory after adding this program
         if ray.get(self.meta_summarizer.should_update_meta.remote(self.evo_config.meta_rec_interval)):
             logger.info(
@@ -482,15 +487,8 @@ class EvolutionRunner:
                         db_program.metadata = {}
                     db_program.metadata["meta_cost"] = meta_cost
                     # Update the program in the database with the new metadata
-                    import json
-
-                    metadata_json = json.dumps(db_program.metadata)
-                    self.db.cursor.execute(
-                        "UPDATE programs SET metadata = ? WHERE id = ?",
-                        (metadata_json, db_program.id),
-                    )
-                    self.db.conn.commit()
-
+                    ray.get(self.db.update_program_metadata.remote(db_program))
+                   
         # Save meta memory state after each job completion 
         # self._save_meta_memory() # No need to save to generation 0
 

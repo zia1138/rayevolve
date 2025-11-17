@@ -321,6 +321,11 @@ class EvoWorker:
 
     def _process_completed_job(self, job: RunningJob):
         """Process a completed job and add results to database."""
+
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()  
+
         end_time = time.time()
         rtime = end_time - job.start_time
 
@@ -388,7 +393,7 @@ class EvoWorker:
 
         # Add the evaluated program to meta memory tracking
         ray.get(self.meta_summarizer.add_evaluated_program.remote(db_program))
-
+  
         # Check if we should update meta memory after adding this program
         if ray.get(self.meta_summarizer.should_update_meta.remote(self.evo_config.meta_rec_interval)):
             logger.info(
@@ -411,19 +416,8 @@ class EvoWorker:
                     if db_program.metadata is None:
                         db_program.metadata = {}
                     db_program.metadata["meta_cost"] = meta_cost
-                    # Update the program in the database with the new metadata
-                    import json
+                    ray.get(self.db.update_program_metadata.remote(db_program))
 
-                    metadata_json = json.dumps(db_program.metadata)
-                    self.db.cursor.execute(
-                        "UPDATE programs SET metadata = ? WHERE id = ?",
-                        (metadata_json, db_program.id),
-                    )
-                    self.db.conn.commit()
-
-        #debugpy.listen(5678)
-        #debugpy.wait_for_client()
-        #debugpy.breakpoint()              
 
         if self.llm_selection is not None:
             if "model_name" not in db_program.metadata:

@@ -2033,3 +2033,12 @@ class ProgramDatabase:
         """
         Get all programs for a specific island.
         """
+
+    def update_program_metadata(self, db_program: Program) -> None:
+        metadata_json = json.dumps(db_program.metadata)
+        self.cursor.execute(
+            "UPDATE programs SET metadata = ? WHERE id = ?",
+            (metadata_json, db_program.id),
+        )
+        self.conn.commit()
+

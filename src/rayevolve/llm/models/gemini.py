@@ -41,11 +41,11 @@ def query_gemini(
     """Query Gemini model."""
     new_msg_history = msg_history + [{"role": "user", "content": msg}]
     if output_model is None:
-        print("running " + model + " with medium reasoning effort")
+        print("running " + model + " with none reasoning effort")
         print(kwargs)
         response = client.chat.completions.create(
             model=model,
-            reasoning_effort="medium",
+            reasoning_effort="none",
             messages=[
                 {"role": "system", "content": system_msg},
                 *new_msg_history,

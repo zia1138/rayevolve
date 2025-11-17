@@ -2,6 +2,7 @@ from typing import List, Optional, Tuple
 import logging
 import json
 from pathlib import Path
+import ray
 from rayevolve.database import Program
 from rayevolve.llm import LLMClient
 from rayevolve.prompts import (
@@ -16,7 +17,7 @@ from rayevolve.prompts import (
 
 logger = logging.getLogger(__name__)
 
-
+@ray.remote
 class MetaSummarizer:
     """Handles meta-level summarization and recommendation generation."""
 
@@ -43,6 +44,9 @@ class MetaSummarizer:
 
         # Track the accumulated count of programs processed in meta updates
         self.total_programs_processed = 0
+
+    def len_evaluated_since_last_meta(self):
+        return len(self.evaluated_since_last_meta)
 
     def add_evaluated_program(self, program: Program) -> None:
         """Add newly evaluated program to the tracking list."""

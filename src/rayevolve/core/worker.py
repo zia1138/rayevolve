@@ -421,6 +421,10 @@ class EvoWorker:
                     )
                     self.db.conn.commit()
 
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()              
+
         if self.llm_selection is not None:
             if "model_name" not in db_program.metadata:
                 logger.warning(
@@ -429,7 +433,7 @@ class EvoWorker:
                 )
             else:
                 parent = (
-                    self.db.get(db_program.parent_id) if db_program.parent_id else None
+                    ray.get(self.db.get.remote(db_program.parent_id)) if db_program.parent_id else None
                 )
                 baseline = parent.combined_score if parent else None
                 reward = db_program.combined_score if correct_val else None

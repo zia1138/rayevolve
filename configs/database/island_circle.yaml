@@ -1,0 +1,14 @@
+# from circle packing example TODO: update
+db_config:
+  _target_: rayevolve.database.DatabaseConfig
+  db_path: "evolution_db.sqlite"
+  archive_size: 40
+  num_archive_inspirations: 4
+  migration_interval: 10
+  island_elitism: true
+  parent_selection_lambda: 10.0
+  elite_selection_ratio: 0.3
+  num_top_k_inspirations: 2
+  migration_rate: 0.0
+  parent_selection_strategy: "weighted"
+  num_islands: 2

@@ -12,7 +12,7 @@ evo_config:
   max_parallel_jobs: 5
   max_patch_resamples: 3
   max_patch_attempts: 3
-  meta_rec_interval: 10 # testing
+  meta_rec_interval: 10 
   meta_max_recommendations: 5
   embedding_model: "text-embedding-3-small"
   max_novelty_attempts: 3 
@@ -20,7 +20,7 @@ evo_config:
   llm_models:
     - "gemini-2.5-flash"
   llm_kwargs:
-    temperatures:
+    temperatures: # this doesn't work for reasoning models temp is fixed at 0
       - 0.0
       - 0.5
       - 1.0

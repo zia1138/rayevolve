@@ -1,10 +1,15 @@
 from typing import Optional, Tuple, List
 import logging
 from pathlib import Path
+
+import ray
 from rayevolve.database import Program
 from rayevolve.llm import LLMClient
 from rayevolve.prompts import NOVELTY_SYSTEM_MSG, NOVELTY_USER_MSG
 
+import debugpy
+
+import ray
 logger = logging.getLogger(__name__)
 
 
@@ -48,11 +53,15 @@ class NoveltyJudge:
         # Check if parent program has island information and islands are initialized
         if (
             parent_program.island_idx is not None
-            and hasattr(database, "island_manager")
-            and database.island_manager is not None
-            and hasattr(database.island_manager, "are_all_islands_initialized")
-            and database.island_manager.are_all_islands_initialized()
+            #and hasattr(database, "island_manager")
+            and ray.get(database.has_island_manager.remote())
+            #and database.island_manager is not None
+            #and hasattr(database.island_manager, "are_all_islands_initialized")
+            #and database.island_manager.are_all_islands_initialized()
+            and ray.get(database.island_manager_has_started_check.remote())
+            and ray.get(database.are_all_islands_initialized.remote())
         ):
+
             return True
 
         return False
@@ -83,12 +92,15 @@ class NoveltyJudge:
             "max_similarity": 0.0,
             "similarity_scores": [],
         }
-
+        #print("checking novelty true")
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()     
         for attempt in range(self.max_novelty_attempts):
             # Compute similarities with programs in island
-            similarity_scores = database.compute_similarity(
+            similarity_scores = ray.get(database.compute_similarity.remote(
                 code_embedding, parent_program.island_idx
-            )
+            ))
 
             if not similarity_scores:
                 logger.info(
@@ -121,9 +133,9 @@ class NoveltyJudge:
 
             if self.novelty_llm_client is not None:
                 # Get the most similar program for LLM comparison
-                most_similar_program = database.get_most_similar_program(
+                most_similar_program = ray.get(database.get_most_similar_program.remote(
                     code_embedding, parent_program.island_idx
-                )
+                ))
 
                 if most_similar_program:
                     try:

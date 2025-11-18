@@ -6,7 +6,7 @@ defaults:
   - cluster@_global_: local
   - variant@_global_: mad_tf_example
 
-verbose: true
+verbose: false
 results_dir: results
 run_name: ${now:%Y.%m.%d}${now:%H%M%S}
 

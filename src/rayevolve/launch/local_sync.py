@@ -91,13 +91,22 @@ def submit(log_dir: str, cmd: list[str], verbose: bool = True):
         logger.info(f"Launching local command: {' '.join(cmd)}")
 
     # Run the process synchronously and capture stdout/stderr
-    # TODO: Handle timeout with timeout parameter.
-    completed = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10*60, # 10 minutes timeout    
+        )
+    except subprocess.TimeoutExpired as e:
+        print("Timeout command: " + ' '.join(cmd))
+        completed = subprocess.CompletedProcess(
+            args=cmd,
+            returncode=255,
+            stdout="",
+            stderr="Process timed out after 10 minutes"
+        )
 
     # Persist outputs to disk
     stdout_text = completed.stdout or ""

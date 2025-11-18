@@ -249,6 +249,9 @@ class EvoWorker:
                     self.novelty_judge.log_novelty_skip_message("no embedding")
                     break
 
+                #debugpy.listen(5678)
+                #debugpy.wait_for_client()
+                #debugpy.breakpoint()            
                 # Use NoveltyJudge for novelty assessment with rejection sampling
                 if self.novelty_judge.should_check_novelty(
                     code_embedding, current_gen, parent_program, self.db
@@ -498,6 +501,9 @@ class EvoWorker:
 
         total_costs = 0
         msg_history = []
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()      
         llm_kwargs = self.llm.get_kwargs()
         if self.llm_selection is not None:
             model_name = llm_kwargs["model_name"]

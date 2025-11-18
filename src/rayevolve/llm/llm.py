@@ -14,6 +14,7 @@ MAX_RETRIES = 3
 
 logger = logging.getLogger(__name__)
 
+import debugpy
 
 class LLMClient:
     def __init__(
@@ -25,7 +26,7 @@ class LLMClient:
         reasoning_efforts: Union[str, List[str]] = "auto",
         model_sample_probs: Optional[List[float]] = None,
         output_model: Optional[BaseModel] = None,
-        verbose: bool = True,
+        verbose: bool = False,
     ):
         self.temperatures = temperatures
         self.max_tokens = max_tokens

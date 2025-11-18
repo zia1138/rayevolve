@@ -257,7 +257,7 @@ class EvolutionRunner:
 
         gen = EvoGen.remote() # generation counter
         workers = []
-        for worker_id in range(8):
+        for worker_id in range(10):
             worker = EvoWorker.remote(str(worker_id),
                                       gen, self.evo_config,  self.job_config,
                                       self.results_dir, 

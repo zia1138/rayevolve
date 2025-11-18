@@ -488,7 +488,6 @@ class EvoWorker:
             top_k_inspirations=top_k_programs,
             meta_recommendations=meta_recs,
         )
-
         if patch_type in ["full", "cross"]:
             apply_patch = apply_full_patch
         elif patch_type == "diff":

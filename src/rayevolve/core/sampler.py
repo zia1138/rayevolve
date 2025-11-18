@@ -16,6 +16,7 @@ from rayevolve.prompts import (
 )
 from rayevolve.prompts.prompts_init import INIT_SYSTEM_MSG, INIT_USER_MSG
 import logging
+import debugpy
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,9 @@ class PromptSampler:
                 language=self.language,
                 include_text_feedback=self.use_text_feedback,
             )
+            #debugpy.listen(5678)
+            #debugpy.wait_for_client()
+            #debugpy.breakpoint()      
 
         # Format text feedback section for current program
         text_feedback_section = ""

@@ -208,10 +208,12 @@ class NoveltyJudge:
         )
 
         try:
+            llm_kwargs = self.novelty_llm_client.get_kwargs()
+            del llm_kwargs["max_tokens"]
             response = self.novelty_llm_client.query(
                 msg=user_msg,
                 system_msg=NOVELTY_SYSTEM_MSG,
-                llm_kwargs=self.novelty_llm_client.get_kwargs(),
+                llm_kwargs=llm_kwargs,
             )
 
             if response is None or response.content is None:

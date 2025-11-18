@@ -248,6 +248,7 @@ class MetaSummarizer:
         # Use batch query to process all programs
         num_programs = len(programs_to_analyze)
         logger.info(f"==> Step 1 - Processing {num_programs} programs with batch query")
+        # NOTE: This doesn't deal with llm_kwargs correclty.
         responses = self.meta_llm_client.batch_kwargs_query(
             num_samples=num_programs,
             msg=user_messages,
@@ -319,6 +320,7 @@ class MetaSummarizer:
             .replace("{best_program_info}", best_program_info)
         )
         llm_params = self.meta_llm_client.get_kwargs()
+        del llm_params["max_tokens"]
         response = self.meta_llm_client.query(
             msg=user_msg,
             system_msg=META_STEP2_SYSTEM_MSG,
@@ -361,6 +363,7 @@ class MetaSummarizer:
         )
 
         llm_params = self.meta_llm_client.get_kwargs()
+        del llm_params["max_tokens"]
         response = self.meta_llm_client.query(
             msg=user_msg,
             system_msg=META_STEP3_SYSTEM_MSG,

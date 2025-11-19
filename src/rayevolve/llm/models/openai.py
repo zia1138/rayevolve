@@ -42,6 +42,7 @@ def query_openai(
     if output_model is None:
         response = client.responses.create(
             model=model,
+            reasoning={"effort": "medium"},
             input=[
                 {"role": "system", "content": system_msg},
                 *new_msg_history,

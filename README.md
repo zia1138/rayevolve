@@ -53,11 +53,16 @@ and https://code.visualstudio.com/docs/python/debugging#_debugging-by-attaching-
 
 Evals
 - figure out how to get to circle packing 2.6x with fewer models and fewer generation
+- better restart (exploration) when system gets stuck
+- add exploration prompts versus exploitation prompts, new ideas
+- add multiturn agents to evolution system
 - get other examples from openevolve into framework
 - explore use of shinkaevolve for a verifable comp bio algorithm with good evals to compare against
  
 Ideas
+- simplify the codebase
+- get meta summarizer working again
 - switch to codex (headless) or pydantic-ai for evolution
 - incorporate more feedback into new program construction
 - switch to modal, etc for program eval (if not local)
-
+- add an agent that monitors the simulation status and dynaimcally adjust exploration/exploitation

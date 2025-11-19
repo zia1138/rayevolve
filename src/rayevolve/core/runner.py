@@ -255,17 +255,34 @@ class EvolutionRunner:
         """Ray based evolution."""
         self._run_generation_0()
 
-        gen = EvoGen.remote() # generation counter
-        workers = []
-        for worker_id in range(15):
-            worker = EvoWorker.remote(str(worker_id),
-                                      gen, self.evo_config,  self.job_config,
-                                      self.results_dir, 
-                                      self.meta_summarizer, 
-                                      self.db, self.verbose)
-            workers.append(worker.run.remote())
+        gen = EvoGen.remote()  # generation counter
 
-        ray.get(workers)
+        all_refs = []
+        num_workers = 12
+        batch_size = 1
+        delay_between_batches = 1 * 60  # 1 minute in seconds
+
+        for batch_start in range(0, num_workers, batch_size):
+            # Launch this batch 
+            for worker_id in range(batch_start, min(batch_start + batch_size, num_workers)):
+                worker = EvoWorker.remote(
+                    str(worker_id),
+                    gen,
+                    self.evo_config,
+                    self.job_config,
+                    self.results_dir,
+                    self.meta_summarizer,
+                    self.db,
+                    self.verbose,
+                )
+                all_refs.append(worker.run.remote())
+
+            # If there is another batch to launch, wait
+            if batch_start + batch_size < num_workers:
+                time.sleep(delay_between_batches)
+
+        # Now wait for ALL workers to finish
+        ray.get(all_refs)
 
     
     def generate_initial_program(self):

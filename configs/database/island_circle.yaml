@@ -9,6 +9,6 @@ db_config:
   parent_selection_lambda: 10.0
   elite_selection_ratio: 0.3
   num_top_k_inspirations: 2
-  migration_rate: 0.0
+  migration_rate: 0.1
   parent_selection_strategy: "weighted"
-  num_islands: 2
+  num_islands: 5

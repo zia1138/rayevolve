@@ -9,7 +9,6 @@ You can run the circle packing example as follows:
 You can visualize the progress as follows:
 `python -m rayevolve.webui.visualization --db results/rayevolve_circle_packing/[current run]/evolution_db.sqlite`
 
-
 # debugging in ray
 
 Add the following in `~/.vscode/launch.json`. You can also use in the launch.json file
@@ -52,18 +51,13 @@ and https://code.visualstudio.com/docs/python/debugging#_debugging-by-attaching-
 
 # TODO
 
-Add to the EvoWorker
-- meta-analyzer (has state, so likely a RayActor)
-- novelty check
-- LLM selection with UCB
-
 Evals
-- replicate circle packing result (2.6x)
+- figure out how to get to circle packing 2.6x with fewer models and fewer generation
 - get other examples from openevolve into framework
-- identify other evals to go after, MLE-bench, ALE-bench, etc.
-
+- explore use of shinkaevolve for a verifable comp bio algorithm with good evals to compare against
+ 
 Ideas
 - switch to codex (headless) or pydantic-ai for evolution
 - incorporate more feedback into new program construction
-- switch to modal for program eval (if not local)
+- switch to modal, etc for program eval (if not local)
 

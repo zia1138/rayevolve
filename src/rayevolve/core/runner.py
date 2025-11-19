@@ -257,7 +257,7 @@ class EvolutionRunner:
 
         gen = EvoGen.remote() # generation counter
         workers = []
-        for worker_id in range(12):
+        for worker_id in range(15):
             worker = EvoWorker.remote(str(worker_id),
                                       gen, self.evo_config,  self.job_config,
                                       self.results_dir, 
@@ -400,7 +400,7 @@ class EvolutionRunner:
             evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
         except Exception as e:
             logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
-            evaluated_code = ""
+            evaluaruted_code = ""
 
         correct_val = False
         metrics_val = {}

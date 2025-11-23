@@ -10,7 +10,6 @@ import numpy as np
 from typing import Any, Dict, List, Optional, Tuple, Union
 import math
 import ray
-from .complexity import analyze_code_metrics
 from .parents import CombinedParentSelector
 from .inspirations import CombinedContextSelector
 from .islands import CombinedIslandManager
@@ -552,20 +551,6 @@ class ProgramDatabase:
             raise ConnectionError("DB not connected.")
 
         self.island_manager.assign_island(program)
-
-        # Calculate complexity if not pre-set (or if default 0.0)
-        if program.complexity == 0.0:
-            try:
-                code_metrics = analyze_code_metrics(program.code, program.language)
-                program.complexity = code_metrics.get("complexity_score", 0.0)
-                if program.metadata is None:
-                    program.metadata = {}
-                program.metadata["code_analysis_metrics"] = code_metrics
-            except Exception as e:
-                logger.warning(
-                    f"Could not calculate complexity for program {program.id}: {e}"
-                )
-                program.complexity = float(len(program.code))  # Fallback to length
 
         # Embedding is expected to be provided by the user.
         # Ensure program.embedding is a list, even if empty.

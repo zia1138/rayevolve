@@ -18,7 +18,6 @@ dependencies = [
     "python-dotenv",
     "instructor",
     "python-Levenshtein",
-    "radon",
     "unidiff",
     "dill",
     "hydra-core==1.3.2",

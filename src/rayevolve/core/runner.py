@@ -34,7 +34,6 @@ from rayevolve.edit import (
     redact_immutable,
 )
 from rayevolve.core.sampler import PromptSampler
-from rayevolve.core.summarizer import MetaSummarizer
 from rayevolve.core.novelty_judge import NoveltyJudge
 
 import debugpy
@@ -144,15 +143,6 @@ class EvolutionRunner:
         else:
             self.embedding = None
 
-        if evo_config.meta_llm_models is not None:
-            self.meta_llm = LLMClient(
-                model_names=evo_config.meta_llm_models,
-                **evo_config.meta_llm_kwargs,
-                verbose=verbose,
-            )
-        else:
-            self.meta_llm = None
-
         if evo_config.novelty_llm_models is not None:
             self.novelty_llm = LLMClient(
                 model_names=evo_config.novelty_llm_models,
@@ -170,15 +160,7 @@ class EvolutionRunner:
             patch_type_probs=evo_config.patch_type_probs,
             use_text_feedback=evo_config.use_text_feedback,
         )
-
-        # Initialize MetaSummarizer for meta-recommendations
-        self.meta_summarizer = MetaSummarizer.remote(
-            meta_llm_client=self.meta_llm,
-            language=evo_config.language,
-            use_text_feedback=evo_config.use_text_feedback,
-            max_recommendations=evo_config.meta_max_recommendations,
-        )
-
+        
         # Initialize NoveltyJudge for novelty assessment
         self.novelty_judge = NoveltyJudge(
             novelty_llm_client=self.novelty_llm,
@@ -220,8 +202,6 @@ class EvolutionRunner:
             )
             logger.info("=" * 80)
             self._update_best_solution()
-            # Restore meta memory state when resuming
-            self._restore_meta_memory()
         else:
             self.completed_generations = 0
 
@@ -271,7 +251,6 @@ class EvolutionRunner:
                     self.evo_config,
                     self.job_config,
                     self.results_dir,
-                    self.meta_summarizer,
                     self.db,
                     self.verbose,
                 )
@@ -473,41 +452,9 @@ class EvolutionRunner:
         #self.db.save()
         self._update_best_solution()
 
-        # Add the evaluated program to meta memory tracking
-        ray.get(self.meta_summarizer.add_evaluated_program.remote(db_program))
-
         #debugpy.listen(5678)
         #debugpy.wait_for_client()
         #debugpy.breakpoint()  
-
-        # Check if we should update meta memory after adding this program
-        if ray.get(self.meta_summarizer.should_update_meta.remote(self.evo_config.meta_rec_interval)):
-            logger.info(
-                f"Updating meta memory after processing "
-                f"{ray.get(self.meta_summarizer.len_evaluated_since_last_meta.remote())} programs..."
-            )
-            best_program = ray.get(self.db.get_best_program.remote())
-            #best_program = self.db.get_best_program.remote()
-            updated_recs, meta_cost = ray.get(self.meta_summarizer.update_meta_memory.remote(
-                best_program
-            ))
-            if updated_recs:
-                # Write meta output file for generation 0
-                ray.get(self.meta_summarizer.write_meta_output.remote(str(self.results_dir)))
-                # Store meta cost for tracking
-                if meta_cost > 0:
-                    logger.info(
-                        f"Meta recommendation generation cost: ${meta_cost:.4f}"
-                    )
-                    # Add meta cost to this program's metadata (the one that triggered the update)
-                    if db_program.metadata is None:
-                        db_program.metadata = {}
-                    db_program.metadata["meta_cost"] = meta_cost
-                    # Update the program in the database with the new metadata
-                    ray.get(self.db.update_program_metadata.remote(db_program))
-                   
-        # Save meta memory state after each job completion 
-        # self._save_meta_memory() # No need to save to generation 0
 
     def _update_best_solution(self):
         """Checks and updates the best program."""
@@ -541,25 +488,6 @@ class EvolutionRunner:
                 f"id {best_program.id[:6]}... "
                 f"Copied to {best_dir}"
             )
-
-
-    def _restore_meta_memory(self) -> None:
-        """Restore the meta memory state from disk."""
-        meta_memory_path = Path(self.results_dir) / "meta_memory.json"
-
-        if self.verbose:
-            logger.info(f"Attempting to restore meta memory from: {meta_memory_path}")
-
-        success = ray.get(self.meta_summarizer.load_meta_state.remote(str(meta_memory_path)))
-        if success:
-            logger.info("Successfully restored meta memory state")
-        else:
-            if meta_memory_path.exists():
-                logger.warning(
-                    f"Meta memory file exists but failed to load: {meta_memory_path}"
-                )
-            else:
-                logger.info("No previous meta memory state found - starting fresh")
 
     def get_code_embedding(self, exec_fname: str) -> tuple[List[float], float]:
         """Get the embedding of the code."""

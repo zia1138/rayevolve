@@ -1,6 +1,6 @@
 from .scheduler import JobScheduler, JobConfig
 from .scheduler import LocalJobConfig
-from .local import ProcessWithLogging
+from .local_sync import ProcessWithLogging
 
 __all__ = [
     "JobScheduler",

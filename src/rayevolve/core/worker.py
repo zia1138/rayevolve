@@ -1,7 +1,4 @@
 
-from asyncio import tasks
-import shutil
-import sys
 import uuid
 import time
 import logging
@@ -33,7 +30,6 @@ from rayevolve.edit import (
     redact_immutable,
 )
 from rayevolve.core.sampler import PromptSampler
-from rayevolve.core.summarizer import MetaSummarizer
 from rayevolve.core.novelty_judge import NoveltyJudge
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 
@@ -66,7 +62,6 @@ class EvoWorker:
                  evo_config: EvolutionConfig, 
                  job_config: JobConfig,
                  results_dir: str,
-                 meta_summarizer: MetaSummarizer,
                  db: ProgramDatabase, 
                  verbose: bool):
         super().__init__()  
@@ -74,7 +69,6 @@ class EvoWorker:
         self.gen = gen
         self.evo_config = evo_config
         self.results_dir = results_dir
-        self.meta_summarizer = meta_summarizer
         self.db = db
         self.verbose = verbose
 
@@ -112,15 +106,6 @@ class EvoWorker:
             )
         else:
             self.embedding = None
-
-        if evo_config.meta_llm_models is not None:
-            self.meta_llm = LLMClient(
-                model_names=evo_config.meta_llm_models,
-                **evo_config.meta_llm_kwargs,
-                verbose=verbose,
-            )
-        else:
-            self.meta_llm = None
 
         if evo_config.novelty_llm_models is not None:
             self.novelty_llm = LLMClient(
@@ -190,104 +175,83 @@ class EvoWorker:
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        # Get current meta-recommendations for this job
-        meta_recs, meta_summary, meta_scratch = ray.get(self.meta_summarizer.get_current.remote())
-
-        # Sample parent and inspiration programs
-        if current_gen == 0:
-            parent_id = None
-            archive_insp_ids = []
-            top_k_insp_ids = []
-            code_diff = None
-            meta_patch_data = {}
-            # Initial program already copied in setup_initial_program
-        else:
-            api_costs = 0
-            embed_cost = 0
-            novelty_cost = 0.0
-            novelty_checks_performed = 0
-            # Loop over novelty attempts
-            for nov_attempt in range(self.evo_config.max_novelty_attempts):
-                # Loop over patch resamples - including parents
-                for resample in range(self.evo_config.max_patch_resamples):
-                    (
-                        parent_program,
-                        archive_programs,
-                        top_k_programs,
-                    ) = ray.get(self.db.sample.remote(
-                        target_generation=current_gen,
-                        novelty_attempt=nov_attempt + 1,
-                        max_novelty_attempts=self.evo_config.max_novelty_attempts,
-                        resample_attempt=resample + 1,
-                        max_resample_attempts=self.evo_config.max_patch_resamples,
-                    ))
-                    archive_insp_ids = [p.id for p in archive_programs]
-                    top_k_insp_ids = [p.id for p in top_k_programs]
-                    parent_id = parent_program.id
-                    # Run patch (until success with max attempts)
-                    code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
-                        parent_program,
-                        archive_programs,
-                        top_k_programs,
-                        current_gen,
-                        novelty_attempt=nov_attempt + 1,
-                        resample_attempt=resample + 1,
-                    )
-                    api_costs += meta_patch_data["api_costs"]
-                    if (
-                        meta_patch_data["error_attempt"] is None
-                        and num_applied_attempt > 0
-                    ):
-                        meta_patch_data["api_costs"] = api_costs
-                        break
-
-                # Get the code embedding for the evaluated code
-                code_embedding, e_cost = self.get_code_embedding(exec_fname)
-                embed_cost += e_cost
-
-                if not code_embedding:
-                    self.novelty_judge.log_novelty_skip_message("no embedding")
-                    break
-
-                #debugpy.listen(5678)
-                #debugpy.wait_for_client()
-                #debugpy.breakpoint()            
-                # Use NoveltyJudge for novelty assessment with rejection sampling
-                if self.novelty_judge.should_check_novelty(
-                    code_embedding, current_gen, parent_program, self.db
+        api_costs = 0
+        embed_cost = 0
+        novelty_cost = 0.0
+        novelty_checks_performed = 0
+        # Loop over novelty attempts
+        for nov_attempt in range(self.evo_config.max_novelty_attempts):
+            # Loop over patch resamples - including parents
+            for resample in range(self.evo_config.max_patch_resamples):
+                (
+                    parent_program,
+                    archive_programs,
+                    top_k_programs,
+                ) = ray.get(self.db.sample.remote(
+                    target_generation=current_gen,
+                    novelty_attempt=nov_attempt + 1,
+                    max_novelty_attempts=self.evo_config.max_novelty_attempts,
+                    resample_attempt=resample + 1,
+                    max_resample_attempts=self.evo_config.max_patch_resamples,
+                ))
+                archive_insp_ids = [p.id for p in archive_programs]
+                top_k_insp_ids = [p.id for p in top_k_programs]
+                parent_id = parent_program.id
+                # Run patch (until success with max attempts)
+                code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
+                    parent_program,
+                    archive_programs,
+                    top_k_programs,
+                    current_gen,
+                    novelty_attempt=nov_attempt + 1,
+                    resample_attempt=resample + 1,
+                )
+                api_costs += meta_patch_data["api_costs"]
+                if (
+                    meta_patch_data["error_attempt"] is None
+                    and num_applied_attempt > 0
                 ):
-                    should_accept, novelty_metadata = (
-                        self.novelty_judge.assess_novelty_with_rejection_sampling(
-                            exec_fname, code_embedding, parent_program, self.db
-                        )
-                    )
-
-                    # Update costs and metadata from novelty assessment
-                    novelty_cost += novelty_metadata.get("novelty_total_cost", 0.0)
-                    novelty_checks_performed = novelty_metadata.get(
-                        "novelty_checks_performed", 0
-                    )
-                    novelty_explanation = novelty_metadata.get(
-                        "novelty_explanation", ""
-                    )
-
-                    if should_accept:
-                        break
-                    # If not accepted, continue to next attempt (rejection sampling)
-                else:
-                    if not ray.get(self.db.has_island_manager.remote()) or not ray.get(self.db.island_manager_has_started_check.remote()):
-                        self.novelty_judge.log_novelty_skip_message("no island manager")
-                    elif not ray.get(self.db.are_all_islands_initialized.remote()):
-                        self.novelty_judge.log_novelty_skip_message(
-                            "not all islands initialized yet"
-                        )
+                    meta_patch_data["api_costs"] = api_costs
                     break
 
-        # Add meta-recommendations/summary/scratchpad to meta_patch_data
-        if meta_recs is not None:
-            meta_patch_data["meta_recommendations"] = meta_recs
-            meta_patch_data["meta_summary"] = meta_summary
-            meta_patch_data["meta_scratch_pad"] = meta_scratch
+            # Get the code embedding for the evaluated code
+            code_embedding, e_cost = self.get_code_embedding(exec_fname)
+            embed_cost += e_cost
+
+            if not code_embedding:
+                self.novelty_judge.log_novelty_skip_message("no embedding")
+                break
+
+            # Use NoveltyJudge for novelty assessment with rejection sampling
+            if self.novelty_judge.should_check_novelty(
+                code_embedding, current_gen, parent_program, self.db
+            ):
+                should_accept, novelty_metadata = (
+                    self.novelty_judge.assess_novelty_with_rejection_sampling(
+                        exec_fname, code_embedding, parent_program, self.db
+                    )
+                )
+
+                # Update costs and metadata from novelty assessment
+                novelty_cost += novelty_metadata.get("novelty_total_cost", 0.0)
+                novelty_checks_performed = novelty_metadata.get(
+                    "novelty_checks_performed", 0
+                )
+                novelty_explanation = novelty_metadata.get(
+                    "novelty_explanation", ""
+                )
+
+                if should_accept:
+                    break
+                # If not accepted, continue to next attempt (rejection sampling)
+            else:
+                if not ray.get(self.db.has_island_manager.remote()) or not ray.get(self.db.island_manager_has_started_check.remote()):
+                    self.novelty_judge.log_novelty_skip_message("no island manager")
+                elif not ray.get(self.db.are_all_islands_initialized.remote()):
+                    self.novelty_judge.log_novelty_skip_message(
+                        "not all islands initialized yet"
+                    )
+                break
 
         # Add novelty check information to meta_patch_data if any checks were performed
         if current_gen > 0 and novelty_checks_performed > 0:
@@ -394,34 +358,6 @@ class EvoWorker:
         )
         ray.get(self.db.add.remote(db_program, verbose=True))
 
-        # Add the evaluated program to meta memory tracking
-        ray.get(self.meta_summarizer.add_evaluated_program.remote(db_program))
-  
-        # Check if we should update meta memory after adding this program
-        if ray.get(self.meta_summarizer.should_update_meta.remote(self.evo_config.meta_rec_interval)):
-            logger.info(
-                f"Updating meta memory after processing "
-                f"{ray.get(self.meta_summarizer.len_evaluated_since_last_meta.remote())} programs..."
-            )
-            best_program = ray.get(self.db.get_best_program.remote())
-            updated_recs, meta_cost = ray.get(self.meta_summarizer.update_meta_memory.remote(
-                best_program
-            ))
-            if updated_recs:
-                # Write meta output file using accumulated program count
-                ray.get(self.meta_summarizer.write_meta_output.remote(str(self.results_dir)))
-                # Store meta cost for tracking
-                if meta_cost > 0:
-                    logger.info(
-                        f"Meta recommendation generation cost: ${meta_cost:.4f}"
-                    )
-                    # Add meta cost to this program's metadata (the one that triggered the update)
-                    if db_program.metadata is None:
-                        db_program.metadata = {}
-                    db_program.metadata["meta_cost"] = meta_cost
-                    ray.get(self.db.update_program_metadata.remote(db_program))
-
-
         if self.llm_selection is not None:
             if "model_name" not in db_program.metadata:
                 logger.warning(
@@ -457,12 +393,6 @@ class EvoWorker:
         ray.get(self.db.save.remote())
         #self._update_best_solution()
 
-        # Note: Meta summarization check is now done after completed generations
-        # are updated in the main loop to ensure correct timing
-
-        # Save meta memory state after each job completion
-        self._save_meta_memory()
-
     def run_patch(
         self,
         parent_program: Program,
@@ -479,14 +409,11 @@ class EvoWorker:
                 f"Edit Cycle {generation} -> {generation + 1}, "
                 f"Max Patch Attempts: {max_patch_attempts}"
             )
-        # Get current meta recommendations
-        meta_recs, _, _ = ray.get(self.meta_summarizer.get_current.remote())
         # Construct edit / code change message
         patch_sys, patch_msg, patch_type = self.prompt_sampler.sample(
             parent=parent_program,
             archive_inspirations=archive_programs,
             top_k_inspirations=top_k_programs,
-            meta_recommendations=meta_recs,
         )
         if patch_type in ["full", "cross"]:
             apply_patch = apply_full_patch
@@ -786,8 +713,4 @@ class EvoWorker:
 
         self.console.print(table)
 
-    def _save_meta_memory(self) -> None:
-        """Save the meta memory state to disk."""
-        meta_memory_path = Path(self.results_dir) / "meta_memory.json"
-        ray.get(self.meta_summarizer.save_meta_state.remote(str(meta_memory_path)))
 

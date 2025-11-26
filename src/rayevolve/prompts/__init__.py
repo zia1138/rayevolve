@@ -17,14 +17,6 @@ from .prompts_cross import (
     get_cross_component,
 )
 from .prompts_init import INIT_SYSTEM_MSG, INIT_USER_MSG
-from .prompts_meta import (
-    META_STEP1_SYSTEM_MSG,
-    META_STEP1_USER_MSG,
-    META_STEP2_SYSTEM_MSG,
-    META_STEP2_USER_MSG,
-    META_STEP3_SYSTEM_MSG,
-    META_STEP3_USER_MSG,
-)
 from .prompts_novelty import NOVELTY_SYSTEM_MSG, NOVELTY_USER_MSG
 
 __all__ = [

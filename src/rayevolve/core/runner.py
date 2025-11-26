@@ -34,7 +34,6 @@ from rayevolve.edit import (
     redact_immutable,
 )
 from rayevolve.core.sampler import PromptSampler
-from rayevolve.core.novelty_judge import NoveltyJudge
 
 import debugpy
 FOLDER_PREFIX = "gen"
@@ -143,15 +142,6 @@ class EvolutionRunner:
         else:
             self.embedding = None
 
-        if evo_config.novelty_llm_models is not None:
-            self.novelty_llm = LLMClient(
-                model_names=evo_config.novelty_llm_models,
-                **evo_config.novelty_llm_kwargs,
-                verbose=verbose,
-            )
-        else:
-            self.novelty_llm = None
-
         # Initialize PromptSampler for handling LLM code prompts
         self.prompt_sampler = PromptSampler(
             task_sys_msg=evo_config.task_sys_msg,
@@ -161,14 +151,6 @@ class EvolutionRunner:
             use_text_feedback=evo_config.use_text_feedback,
         )
         
-        # Initialize NoveltyJudge for novelty assessment
-        self.novelty_judge = NoveltyJudge(
-            novelty_llm_client=self.novelty_llm,
-            language=evo_config.language,
-            similarity_threshold=evo_config.code_embed_sim_threshold,
-            max_novelty_attempts=evo_config.max_novelty_attempts,
-        )
-
         # Initialize rich console for formatted output
         self.console = Console()
 
@@ -239,7 +221,7 @@ class EvolutionRunner:
 
         all_refs = []
         num_workers = 12
-        batch_size = 1
+        batch_size = 12
         delay_between_batches = 1 * 60  # 1 minute in seconds
 
         for batch_start in range(0, num_workers, batch_size):

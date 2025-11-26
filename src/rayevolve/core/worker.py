@@ -1,4 +1,3 @@
-
 import uuid
 import time
 import logging
@@ -30,7 +29,6 @@ from rayevolve.edit import (
     redact_immutable,
 )
 from rayevolve.core.sampler import PromptSampler
-from rayevolve.core.novelty_judge import NoveltyJudge
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 
 import debugpy
@@ -107,15 +105,6 @@ class EvoWorker:
         else:
             self.embedding = None
 
-        if evo_config.novelty_llm_models is not None:
-            self.novelty_llm = LLMClient(
-                model_names=evo_config.novelty_llm_models,
-                **evo_config.novelty_llm_kwargs,
-                verbose=verbose,
-            )
-        else:
-            self.novelty_llm = None
-
         # Initialize PromptSampler for handling LLM code prompts
         self.prompt_sampler = PromptSampler(
             task_sys_msg=evo_config.task_sys_msg,
@@ -123,14 +112,6 @@ class EvoWorker:
             patch_types=evo_config.patch_types,
             patch_type_probs=evo_config.patch_type_probs,
             use_text_feedback=evo_config.use_text_feedback,
-        )
-
-        # Initialize NoveltyJudge for novelty assessment
-        self.novelty_judge = NoveltyJudge(
-            novelty_llm_client=self.novelty_llm,
-            language=evo_config.language,
-            similarity_threshold=evo_config.code_embed_sim_threshold,
-            max_novelty_attempts=evo_config.max_novelty_attempts,
         )
 
         # Initialize rich console for formatted output
@@ -178,86 +159,42 @@ class EvoWorker:
         api_costs = 0
         embed_cost = 0
         novelty_cost = 0.0
-        novelty_checks_performed = 0
-        # Loop over novelty attempts
-        for nov_attempt in range(self.evo_config.max_novelty_attempts):
-            # Loop over patch resamples - including parents
-            for resample in range(self.evo_config.max_patch_resamples):
-                (
-                    parent_program,
-                    archive_programs,
-                    top_k_programs,
-                ) = ray.get(self.db.sample.remote(
-                    target_generation=current_gen,
-                    novelty_attempt=nov_attempt + 1,
-                    max_novelty_attempts=self.evo_config.max_novelty_attempts,
-                    resample_attempt=resample + 1,
-                    max_resample_attempts=self.evo_config.max_patch_resamples,
-                ))
-                archive_insp_ids = [p.id for p in archive_programs]
-                top_k_insp_ids = [p.id for p in top_k_programs]
-                parent_id = parent_program.id
-                # Run patch (until success with max attempts)
-                code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
-                    parent_program,
-                    archive_programs,
-                    top_k_programs,
-                    current_gen,
-                    novelty_attempt=nov_attempt + 1,
-                    resample_attempt=resample + 1,
-                )
-                api_costs += meta_patch_data["api_costs"]
-                if (
-                    meta_patch_data["error_attempt"] is None
-                    and num_applied_attempt > 0
-                ):
-                    meta_patch_data["api_costs"] = api_costs
-                    break
-
-            # Get the code embedding for the evaluated code
-            code_embedding, e_cost = self.get_code_embedding(exec_fname)
-            embed_cost += e_cost
-
-            if not code_embedding:
-                self.novelty_judge.log_novelty_skip_message("no embedding")
-                break
-
-            # Use NoveltyJudge for novelty assessment with rejection sampling
-            if self.novelty_judge.should_check_novelty(
-                code_embedding, current_gen, parent_program, self.db
+        # Loop over patch resamples - including parents
+        for resample in range(self.evo_config.max_patch_resamples):
+            (
+                parent_program,
+                archive_programs,
+                top_k_programs,
+            ) = ray.get(self.db.sample.remote(
+                target_generation=current_gen,
+                novelty_attempt=1,
+                max_novelty_attempts=self.evo_config.max_novelty_attempts,
+                resample_attempt=resample + 1,
+                max_resample_attempts=self.evo_config.max_patch_resamples,
+            ))
+            archive_insp_ids = [p.id for p in archive_programs]
+            top_k_insp_ids = [p.id for p in top_k_programs]
+            parent_id = parent_program.id
+            # Run patch (until success with max attempts)
+            code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
+                parent_program,
+                archive_programs,
+                top_k_programs,
+                current_gen,
+                novelty_attempt=1,
+                resample_attempt=resample + 1,
+            )
+            api_costs += meta_patch_data["api_costs"]
+            if (
+                meta_patch_data["error_attempt"] is None
+                and num_applied_attempt > 0
             ):
-                should_accept, novelty_metadata = (
-                    self.novelty_judge.assess_novelty_with_rejection_sampling(
-                        exec_fname, code_embedding, parent_program, self.db
-                    )
-                )
-
-                # Update costs and metadata from novelty assessment
-                novelty_cost += novelty_metadata.get("novelty_total_cost", 0.0)
-                novelty_checks_performed = novelty_metadata.get(
-                    "novelty_checks_performed", 0
-                )
-                novelty_explanation = novelty_metadata.get(
-                    "novelty_explanation", ""
-                )
-
-                if should_accept:
-                    break
-                # If not accepted, continue to next attempt (rejection sampling)
-            else:
-                if not ray.get(self.db.has_island_manager.remote()) or not ray.get(self.db.island_manager_has_started_check.remote()):
-                    self.novelty_judge.log_novelty_skip_message("no island manager")
-                elif not ray.get(self.db.are_all_islands_initialized.remote()):
-                    self.novelty_judge.log_novelty_skip_message(
-                        "not all islands initialized yet"
-                    )
+                meta_patch_data["api_costs"] = api_costs
                 break
 
-        # Add novelty check information to meta_patch_data if any checks were performed
-        if current_gen > 0 and novelty_checks_performed > 0:
-            meta_patch_data["novelty_checks_performed"] = novelty_checks_performed
-            meta_patch_data["novelty_cost"] = novelty_cost
-            meta_patch_data["novelty_explanation"] = novelty_explanation
+        # Get the code embedding for the evaluated code
+        code_embedding, e_cost = self.get_code_embedding(exec_fname)
+        embed_cost += e_cost
 
         # Submit the job asynchronously
         job_id = self.scheduler.submit_async(exec_fname, results_dir)

@@ -1485,46 +1485,6 @@ class ProgramDatabase:
         return float(similarity)
 
     @db_retry()
-    def compute_similarity_thread_safe(
-        self, vec: List[float], island_idx: int
-    ) -> List[float]:
-        """
-        Thread-safe version of similarity computation. Creates its own DB connection.
-        """
-        conn = None
-        try:
-            # Create a new connection for this thread
-            conn = sqlite3.connect(
-                self.config.db_path, check_same_thread=False, timeout=60.0
-            )
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "SELECT embedding FROM programs WHERE island_idx = ? AND embedding IS NOT NULL AND embedding != '[]'",
-                (island_idx,),
-            )
-            rows = cursor.fetchall()
-
-            if not rows:
-                return []
-
-            similarities = []
-            for row in rows:
-                db_embedding = json.loads(row["embedding"])
-                if db_embedding:
-                    sim = self._cosine_similarity(vec, db_embedding)
-                    similarities.append(sim)
-            return similarities
-
-        except Exception as e:
-            logger.error(f"Thread-safe similarity computation failed: {e}")
-            raise
-        finally:
-            if conn:
-                conn.close()
-
-    @db_retry()
     def compute_similarity(
         self, code_embedding: List[float], island_idx: int
     ) -> List[float]:

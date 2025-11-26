@@ -70,21 +70,6 @@ class EvoWorker:
         self.db = db
         self.verbose = verbose
 
-        # Initialize LLM selection strategy
-        if evo_config.llm_dynamic_selection is None:
-            self.llm_selection = None
-        elif isinstance(evo_config.llm_dynamic_selection, BanditBase):
-            self.llm_selection = evo_config.llm_dynamic_selection
-        elif (evo_config.llm_dynamic_selection.lower() == "ucb") or (
-            evo_config.llm_dynamic_selection.lower() == "ucb1"
-        ):
-            self.llm_selection = AsymmetricUCB(
-                arm_names=evo_config.llm_models,
-                **evo_config.llm_dynamic_selection_kwargs,
-            )
-        else:
-            raise ValueError("Invalid llm_dynamic_selection")
-
         self.scheduler = JobScheduler(
             job_type=evo_config.job_type,
             config=job_config,  # type: ignore
@@ -93,7 +78,6 @@ class EvoWorker:
 
         self.llm = LLMClient(
             model_names=evo_config.llm_models,
-            model_selection=self.llm_selection,
             **evo_config.llm_kwargs,
             verbose=verbose,
         )
@@ -142,13 +126,10 @@ class EvoWorker:
 
     def _submit_new_job(self):
         """Submit a new job to the queue."""
-        #current_gen = self.next_generation_to_submit
         current_gen = ray.get(self.gen.next.remote())
 
         if current_gen >= self.evo_config.num_generations:
             return
-
-        #self.next_generation_to_submit += 1
 
         exec_fname = (
             f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
@@ -294,39 +275,6 @@ class EvoWorker:
             },
         )
         ray.get(self.db.add.remote(db_program, verbose=True))
-
-        if self.llm_selection is not None:
-            if "model_name" not in db_program.metadata:
-                logger.warning(
-                    "No model_name found in program metadata, "
-                    "unable to update model selection algorithm."
-                )
-            else:
-                parent = (
-                    ray.get(self.db.get.remote(db_program.parent_id)) if db_program.parent_id else None
-                )
-                baseline = parent.combined_score if parent else None
-                reward = db_program.combined_score if correct_val else None
-                model_name = db_program.metadata["model_name"]
-                result = self.llm_selection.update(
-                    arm=model_name,
-                    reward=reward,
-                    baseline=baseline,
-                )
-                if result and self.verbose:
-                    normalized_score, baseline = result
-
-                    def fmt(x):
-                        return f"{x:.4f}" if isinstance(x, (float, int)) else "None"
-
-                    logger.debug(
-                        f"==> UPDATED LLM SELECTION: model: "
-                        f"{model_name.split('/')[-1][-25:]}..., "
-                        f"score: {fmt(normalized_score)}, "
-                        f"raw score: {fmt(reward)}, baseline: {fmt(baseline)}"
-                    )
-                    self.llm_selection.print_summary()
-
         ray.get(self.db.save.remote())
         #self._update_best_solution()
 
@@ -368,9 +316,6 @@ class EvoWorker:
         #debugpy.wait_for_client()
         #debugpy.breakpoint()      
         llm_kwargs = self.llm.get_kwargs()
-        if self.llm_selection is not None:
-            model_name = llm_kwargs["model_name"]
-            self.llm_selection.update_submitted(model_name)
         code_diff = None  # Initialize code_diff
         num_applied_attempt = 0  # Initialize num_applied_attempt
         error_attempt = (

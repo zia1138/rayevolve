@@ -96,21 +96,6 @@ class EvolutionRunner:
         if self.evo_config.results_dir is not None and db_path.exists():
             resuming_run = True
 
-        # Initialize LLM selection strategy
-        if evo_config.llm_dynamic_selection is None:
-            self.llm_selection = None
-        elif isinstance(evo_config.llm_dynamic_selection, BanditBase):
-            self.llm_selection = evo_config.llm_dynamic_selection
-        elif (evo_config.llm_dynamic_selection.lower() == "ucb") or (
-            evo_config.llm_dynamic_selection.lower() == "ucb1"
-        ):
-            self.llm_selection = AsymmetricUCB(
-                arm_names=evo_config.llm_models,
-                **evo_config.llm_dynamic_selection_kwargs,
-            )
-        else:
-            raise ValueError("Invalid llm_dynamic_selection")
-
         # Initialize database and scheduler
         db_config.db_path = str(db_path)
         embedding_model_to_use = (
@@ -130,7 +115,6 @@ class EvolutionRunner:
 
         self.llm = LLMClient(
             model_names=evo_config.llm_models,
-            model_selection=self.llm_selection,
             **evo_config.llm_kwargs,
             verbose=verbose,
         )
@@ -425,13 +409,7 @@ class EvolutionRunner:
         )
 
         ray.get(self.db.add.remote(db_program, verbose=True))
-        # self.db.add(db_program, verbose=True)
-        if self.llm_selection is not None:
-            self.llm_selection.set_baseline_score(
-                db_program.combined_score if correct_val else 0.0,
-            )
         ray.get(self.db.save.remote())
-        #self.db.save()
         self._update_best_solution()
 
         #debugpy.listen(5678)

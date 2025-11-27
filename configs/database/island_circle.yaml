@@ -10,5 +10,8 @@ db_config:
   elite_selection_ratio: 0.3
   num_top_k_inspirations: 2
   migration_rate: 0.1
-  parent_selection_strategy: "weighted"
+  parent_selection_strategy: "power_law"
   num_islands: 5
+  num_beams: 10
+  exploitation_alpha: 100.0
+  exploitation_ratio: 1.0

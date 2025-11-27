@@ -104,9 +104,7 @@ class EvolutionRunner:
         self.db = ProgramDatabase.remote(
             config=db_config, embedding_model=embedding_model_to_use
         )
-        #self.db = ProgramDatabase(
-        #    config=db_config, embedding_model=embedding_model_to_use
-        #)        
+
         self.scheduler = JobScheduler(
             job_type=evo_config.job_type,
             config=job_config,  # type: ignore
@@ -151,7 +149,6 @@ class EvolutionRunner:
             raise ValueError(msg)
 
         # Queue for managing parallel jobs
-        self.running_jobs: List[RunningJob] = []
         self.best_program_id: Optional[str] = None
         self.next_generation_to_submit = 0
 

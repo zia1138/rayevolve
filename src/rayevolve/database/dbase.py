@@ -2037,7 +2037,7 @@ class ProgramDatabase:
         return snapshot
 
     @db_retry()
-    def get_island_health_report(self, island_idx: int, current_gen: int, history_window: int = 10) -> Dict[str, Any]:
+    def get_island_health_report(self, island_idx: int) -> Dict[str, Any]:
         """
         Generates a simplified health report for an island to drive LLM strategy.
         """
@@ -2046,23 +2046,20 @@ class ProgramDatabase:
 
         report = {
             "island_id": island_idx,
-            "current_generation": current_gen,
         }
 
         # 1. Score History (Last N generations, ordered by timestamp)
-        start_gen = max(0, current_gen - history_window)
         self.cursor.execute(
             """
-            SELECT generation, timestamp, MAX(combined_score) as best_score
+            SELECT timestamp, combined_score
             FROM programs
-            WHERE island_idx = ? AND generation >= ? AND correct = 1
-            GROUP BY generation
+            WHERE island_idx = ? AND correct = 1
             ORDER BY timestamp ASC
             """,
-            (island_idx, start_gen)
+            (island_idx,)
         )
         report["score_history"] = [
-            {"gen": r["generation"], "timestamp": r["timestamp"], "best_score": r["best_score"]}
+            {"timestamp": r["timestamp"], "combined_score": r["combined_score"]}
             for r in self.cursor.fetchall()
         ]
 

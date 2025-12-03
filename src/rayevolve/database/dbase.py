@@ -245,7 +245,7 @@ class Program:
 @ray.remote
 class ProgramDatabase:
     """
-    SQLite-backedi database for storing and managing programs during an
+    SQLite-backed database for storing and managing programs during an
     evolutionary process.
     Supports MAP-Elites style feature-based organization, island
     populations, and an archive of elites.
@@ -555,11 +555,10 @@ class ProgramDatabase:
         # Embedding is expected to be provided by the user.
         # Ensure program.embedding is a list, even if empty.
         if not isinstance(program.embedding, list):
-            logger.warning(
-                f"Program {program.id} embedding is not a list, "
-                "defaulting to empty list."
+            raise TypeError(
+                f"Program {program.id} embedding must be a list, "
+                f"got {type(program.embedding)}"
             )
-            program.embedding = []
 
         # Pre-serialize all JSON data once
         public_metrics_json = json.dumps(program.public_metrics or {})
@@ -1973,6 +1972,160 @@ class ProgramDatabase:
         finally:
             if conn:
                 conn.close()
+
+    @db_retry()
+    def get_island_snapshot(self, island_idx: int, limit: int = 5) -> List[Program]:
+        """
+        Returns the 'Effective Archive' for a specific island.
+        1. Tries to find Global Archive members from this island.
+        2. If not enough, backfills with the best local non-archived programs.
+        """
+        if not self.cursor:
+            raise ConnectionError("DB not connected.")
+
+        # 1. Try Global Archive first (The Join)
+        self.cursor.execute(
+            """
+            SELECT p.*
+            FROM programs p
+            JOIN archive a ON p.id = a.program_id
+            WHERE p.island_idx = ?
+            ORDER BY p.combined_score DESC
+            """,
+            (island_idx,)
+        )
+        archive_rows = self.cursor.fetchall()
+        
+        # Convert to Program objects
+        snapshot = [self._program_from_row(row) for row in archive_rows]
+        snapshot = [p for p in snapshot if p is not None]
+
+        # 2. Backfill if we don't have enough (The Safety Net)
+        if len(snapshot) < limit:
+            needed = limit - len(snapshot)
+            
+            # Exclude IDs we already have
+            existing_ids = [p.id for p in snapshot]
+            
+            if existing_ids:
+                placeholders = ",".join("?" * len(existing_ids))
+                # Query for best local programs NOT in our current list
+                query = f"""
+                    SELECT * FROM programs 
+                    WHERE island_idx = ? 
+                    AND correct = 1
+                    AND id NOT IN ({placeholders})
+                    ORDER BY combined_score DESC
+                    LIMIT ?
+                """
+                params = [island_idx] + existing_ids + [needed]
+            else:
+                 query = """
+                    SELECT * FROM programs 
+                    WHERE island_idx = ? 
+                    AND correct = 1
+                    ORDER BY combined_score DESC
+                    LIMIT ?
+                """
+                 params = [island_idx, needed]
+            
+            self.cursor.execute(query, params)
+            backfill_rows = self.cursor.fetchall()
+            backfill_programs = [self._program_from_row(row) for row in backfill_rows]
+            snapshot.extend([p for p in backfill_programs if p is not None])
+
+        return snapshot
+
+    @db_retry()
+    def get_island_health_report(self, island_idx: int, current_gen: int, history_window: int = 10) -> Dict[str, Any]:
+        """
+        Generates a simplified health report for an island to drive LLM strategy.
+        """
+        if not self.cursor:
+            raise ConnectionError("DB not connected.")
+
+        report = {
+            "island_id": island_idx,
+            "current_generation": current_gen,
+        }
+
+        # 1. Score History (Last N generations, ordered by timestamp)
+        start_gen = max(0, current_gen - history_window)
+        self.cursor.execute(
+            """
+            SELECT generation, timestamp, MAX(combined_score) as best_score
+            FROM programs
+            WHERE island_idx = ? AND generation >= ? AND correct = 1
+            GROUP BY generation
+            ORDER BY timestamp ASC
+            """,
+            (island_idx, start_gen)
+        )
+        report["score_history"] = [
+            {"gen": r["generation"], "timestamp": r["timestamp"], "best_score": r["best_score"]}
+            for r in self.cursor.fetchall()
+        ]
+
+        # 2. Recent Activity Stats (over history_window generations)
+        self.cursor.execute(
+            """
+            SELECT 
+                COUNT(*) as total_attempts,
+                SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END) as valid_children_count
+            FROM programs
+            WHERE island_idx = ? AND generation >= ?
+            """,
+            (island_idx, start_gen)
+        )
+        row = self.cursor.fetchone()
+        total_attempts = row["total_attempts"] or 0
+        valid_children_count = row["valid_children_count"] or 0
+        
+        report["recent_island_activity_stats"] = {
+            "total_attempts_last_N_gens": total_attempts,
+            "valid_children_rate": valid_children_count / total_attempts if total_attempts > 0 else 0.0,
+        }
+        
+        # 3. Archive Snapshot with Simplified Effort Stats
+        # Use get_island_snapshot to get the elites/best from this island
+        snapshot_programs = self.get_island_snapshot(island_idx, limit=5)
+        archive_data = []
+        
+        for prog in snapshot_programs:
+            # Get effort stats for this specific program as a parent
+            self.cursor.execute(
+                """
+                SELECT 
+                    COUNT(*) as times_selected_as_parent,
+                    SUM(CASE WHEN combined_score > ? THEN 1 ELSE 0 END) as improvements
+                FROM programs
+                WHERE parent_id = ?
+                """,
+                (prog.combined_score, prog.id)
+            )
+            child_stats = self.cursor.fetchone()
+            times_selected = child_stats["times_selected_as_parent"] or 0
+            improvements = child_stats["improvements"] or 0
+            
+            prog_data = {
+                "id": prog.id,
+                "parent_id": prog.parent_id,
+                "generation": prog.generation,
+                # Truncate code for token efficiency in the report
+                "code_snippet": prog.code[:1000] + "..." if len(prog.code) > 1000 else prog.code,
+                "public_score": prog.combined_score,
+                "runtime_sec": prog.metadata.get("compute_time", 0.0) if prog.metadata else 0.0,
+                
+                "effort_stats": {
+                    "times_selected_as_parent": times_selected,
+                    "improvement_rate_from_this_parent": f"{(improvements / times_selected * 100):.1f}%" if times_selected > 0 else "0.0%",
+                }
+            }
+            archive_data.append(prog_data)
+            
+        report["archive"] = archive_data
+        
+        return report
 
     def _get_programs_for_island(self, island_idx: int) -> List[Program]:
         """

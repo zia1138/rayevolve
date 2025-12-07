@@ -16,6 +16,8 @@ from .islands import CombinedIslandManager
 from .display import DatabaseDisplay
 from rayevolve.llm.embedding import EmbeddingClient
 
+import debugpy
+
 logger = logging.getLogger(__name__)
 
 
@@ -2037,97 +2039,37 @@ class ProgramDatabase:
         return snapshot
 
     @db_retry()
-    def get_island_health_report(self, island_idx: int) -> Dict[str, Any]:
+    def get_best_score_table(self) -> Dict[str, Any]:
         """
-        Generates a simplified health report for an island to drive LLM strategy.
+        Gets a table of best score over time accross all correct programs.
         """
         if not self.cursor:
             raise ConnectionError("DB not connected.")
 
-        report = {
-            "island_id": island_idx,
-        }
-
-        # 1. Score History (Last N generations, ordered by timestamp)
+        # Get all correct programs for the island, ordered by timestamp
         self.cursor.execute(
             """
             SELECT timestamp, combined_score
             FROM programs
-            WHERE island_idx = ? AND correct = 1
+            WHERE correct = 1
             ORDER BY timestamp ASC
-            """,
-            (island_idx,)
-        )
-        report["score_history"] = [
-            {"timestamp": r["timestamp"], "combined_score": r["combined_score"]}
-            for r in self.cursor.fetchall()
-        ]
-
-        # 2. Recent Activity Stats (over history_window generations)
-        self.cursor.execute(
             """
-            SELECT 
-                COUNT(*) as total_attempts,
-                SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END) as valid_children_count
-            FROM programs
-            WHERE island_idx = ? AND generation >= ?
-            """,
-            (island_idx, start_gen)
         )
-        row = self.cursor.fetchone()
-        total_attempts = row["total_attempts"] or 0
-        valid_children_count = row["valid_children_count"] or 0
-        
-        report["recent_island_activity_stats"] = {
-            "total_attempts_last_N_gens": total_attempts,
-            "valid_children_rate": valid_children_count / total_attempts if total_attempts > 0 else 0.0,
-        }
-        
-        # 3. Archive Snapshot with Simplified Effort Stats
-        # Use get_island_snapshot to get the elites/best from this island
-        snapshot_programs = self.get_island_snapshot(island_idx, limit=5)
-        archive_data = []
-        
-        for prog in snapshot_programs:
-            # Get effort stats for this specific program as a parent
-            self.cursor.execute(
-                """
-                SELECT 
-                    COUNT(*) as times_selected_as_parent,
-                    SUM(CASE WHEN combined_score > ? THEN 1 ELSE 0 END) as improvements
-                FROM programs
-                WHERE parent_id = ?
-                """,
-                (prog.combined_score, prog.id)
-            )
-            child_stats = self.cursor.fetchone()
-            times_selected = child_stats["times_selected_as_parent"] or 0
-            improvements = child_stats["improvements"] or 0
-            
-            prog_data = {
-                "id": prog.id,
-                "parent_id": prog.parent_id,
-                "generation": prog.generation,
-                # Truncate code for token efficiency in the report
-                "code_snippet": prog.code[:1000] + "..." if len(prog.code) > 1000 else prog.code,
-                "public_score": prog.combined_score,
-                "runtime_sec": prog.metadata.get("compute_time", 0.0) if prog.metadata else 0.0,
-                
-                "effort_stats": {
-                    "times_selected_as_parent": times_selected,
-                    "improvement_rate_from_this_parent": f"{(improvements / times_selected * 100):.1f}%" if times_selected > 0 else "0.0%",
-                }
-            }
-            archive_data.append(prog_data)
-            
-        report["archive"] = archive_data
-        
-        return report
+        raw_history = self.cursor.fetchall()
 
-    def _get_programs_for_island(self, island_idx: int) -> List[Program]:
-        """
-        Get all programs for a specific island.
-        """
+        # Compute best_score_history (running maximum) and format values into a tab-delimited table
+        best_score_so_far = -float('inf')
+        history_lines = ["Time\tBest Score"] # Header row
+        for row in raw_history:
+            timestamp = int(round(row["timestamp"], 0)) # Round timestamp to integer
+            score = round(row["combined_score"], 3) # Round score to 3 decimal places
+            if score > best_score_so_far:
+                best_score_so_far = score
+            # Append tab-delimited row
+            history_lines.append(f"{timestamp}\t{score:.3f}")
+
+        # Join all rows with newlines
+        return "\n".join(history_lines)
 
     def update_program_metadata(self, db_program: Program) -> None:
         metadata_json = json.dumps(db_program.metadata)

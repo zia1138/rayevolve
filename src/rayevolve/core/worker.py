@@ -33,8 +33,32 @@ from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 
 import debugpy
 
+import textwrap
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent, ModelMessage, RunContext, RunUsage, UsageLimits
+from enum import Enum
+
 logger = logging.getLogger(__name__)
 
+class StrategyProbs(BaseModel):
+    """Probabilities for each evolutionary strategy."""
+    climb: float = Field(..., description="Probability of choosing the climb strategy", ge=0)
+    drift_up: float = Field(..., description="Probability of choosing the drift up strategy", ge=0)
+    drift_away: float = Field(..., description="Probability of choosing the drift away strategy", ge=0)
+    jump: float = Field(..., description="Probability of choosing the jump strategy", ge=0)
+    reasoning: str = Field(..., description="A short sentence explaining the reasoning behind the chosen probabilities.")
+    def as_normalized_weights(self) -> dict[str, float]:
+        """Return a dict of normalized probabilities that sums to 1."""
+        weights = {
+            "climb": self.climb,
+            "drift_up": self.drift_up,
+            "drift_away": self.drift_away,
+            "jump": self.jump,
+        }
+        total = sum(weights.values())
+        if total <= 0:
+            raise ValueError("All probabilities are zero or negative")
+        return {k: v / total for k, v in weights.items()}
 
 @ray.remote
 class EvoGen:
@@ -127,6 +151,49 @@ class EvoWorker:
     def _submit_new_job(self):
         """Submit a new job to the queue."""
         current_gen = ray.get(self.gen.next.remote())
+
+        if current_gen == 5: 
+            debugpy.listen(5678)
+            debugpy.wait_for_client()
+            debugpy.breakpoint()   
+            best_score_table = ray.get(self.db.get_best_score_table.remote())
+            template = textwrap.dedent("""
+                You are the Strategic Supervisor for an evolutionary code optimization system.
+                Your job is to set the probability distribution for the next worker based on the current progress trend.
+
+                ### CURRENT STATUS (Best Score History)
+                {best_score_table}
+
+                "Time" is seconds since the epoch and "Best Score" is on an arbitrary scale where higher is better.
+
+                ### ANALYSIS RULES (Focus on the most recent entries in the table)
+                1. **Analyze Velocity:** Is the score rising quickly, slowly, or flatlining?
+                2. **Analyze Stagnation:**
+                - If it is early in the simulation, **stagnation cannot be definitively detected**. Prioritize initial exploration.
+                - Compare the current rate of improvement (or lack thereof) to previous periods of successful growth.
+                - Determine if the current trend is significantly slower or has completely flattened compared to historical bests. 
+                    This establishes whether true stagnation or just slower growth is occurring.
+
+                ### STRATEGY DEFINITIONS
+                1. **CLIMB (Exploit):** Best when **Velocity is HIGH**.
+                - Focuses on rigorously exploiting the current best code to achieve further, direct score improvements.
+                2. **DRIFT UP (Exploit/Explore):** Best when **Velocity is SLOW**.
+                - Targets non-elite parents with potential, seeking to improve them and discover adjacent, potentially higher, peaks.
+                3. **DRIFT AWAY (Explore):** Best when **Stuck (Short Term)**.
+                - Ignores score improvement. Tries to gradually change approach significantly while maintaining correctness, to escape local optima.
+                4. **JUMP (Radical):** Best when **Stuck (Long Term)**.
+                - Generates fresh approaches that differ from current set of elites to explore new areas of the solution space.
+            """)
+            prompt = template.format(best_score_table=best_score_table)
+
+            evo_strategist = Agent(
+                "google-gla:gemini-2.5-pro",
+                output_type=StrategyProbs,
+            )
+            result = evo_strategist.run_sync(prompt)
+            probs: StrategyProbs = result.output
+
+            weights = probs.as_normalized_weights()
 
         if current_gen >= self.evo_config.num_generations:
             return

@@ -1,3 +1,4 @@
+import random
 import uuid
 import time
 import logging
@@ -33,7 +34,10 @@ from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 
 import debugpy
 
+import textwrap
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelMessage, RunContext, RunUsage, UsageLimits
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -96,495 +100,150 @@ class EvoWorker:
         #debugpy.breakpoint()              
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            strategy = await self.agent_strategy(current_gen)
-            
-    async def agent_strategy(self, current_gen: int) -> str: 
+            await self.run_strategy()
 
-        @dataclass
-        class StrategyConfig:
-            db: ProgramDatabase
-            generation: int
+    async def run_strategy(self):            
+        best_score_table = await self.db.get_best_score_table.remote() 
 
-        evo_strategist = Agent('openai:gpt-5')
+        template = textwrap.dedent("""
+            You are the Strategic Supervisor for an evolutionary code optimization system.
+            Your job is to set the probability distribution for the next worker based on the current progress trend.
 
-        
+            ### CURRENT STATUS (Best Score History)
+            {best_score_table}
+
+            "Time" is seconds since the epoch and "Best Score" is on an arbitrary scale where higher is better.
+
+            ### ANALYSIS RULES (Focus on the most recent entries in the table)
+            1. **Analyze Velocity:** Is the score rising quickly, slowly, or flatlining?
+            2. **Analyze Stagnation:**
+               - If it is early in the simulation, **stagnation cannot be definitively detected**. Prioritize initial exploration.
+               - Compare the current rate of improvement (or lack thereof) to previous periods of successful growth.
+               - Determine if the current trend is significantly slower or has completely flattened compared to historical bests. 
+                 This establishes whether true stagnation or just slower growth is occurring.
+
+            ### STRATEGY DEFINITIONS
+            1. **CLIMB (Exploit):** Best when **Velocity is HIGH**.
+               - Focuses on rigorously exploiting the current best code to achieve further, direct score improvements.
+            2. **DRIFT UP (Exploit/Explore):** Best when **Velocity is SLOW**.
+               - Targets non-elite parents with potential, seeking to improve them and discover adjacent, potentially higher, peaks.
+            3. **DRIFT AWAY (Explore):** Best when **Stuck (Short Term)**.
+               - Ignores score improvement. Tries to gradually change approach significantly while maintaining correctness, to escape local optima.
+            4. **JUMP (Radical):** Best when **Stuck (Long Term)**.
+               - Generates fresh approaches that differ from current set of elites to explore new areas of the solution space.
+
+            """)
+        prompt = template.format(best_score_table=best_score_table)
+        # Instructions for output format might not be necessary.
+        """
+            ### OUTPUT
+            Return a JSON object with these keys. Ensure values sum to 1.0.
+            - "reasoning": "A concise sentence explaining your strategic decision based on the historical data analysis."
+            - "climb": float
+            - "drift_up": float
+            - "drift_away": float
+            - "jump": float
+        """
+        class StrategyProbs(BaseModel):
+            """Probabilities for each evolutionary strategy."""
+            climb: float = Field(..., description="Probability of choosing the climb strategy", ge=0)
+            drift_up: float = Field(..., description="Probability of choosing the drift up strategy", ge=0)
+            drift_away: float = Field(..., description="Probability of choosing the drift away strategy", ge=0)
+            jump: float = Field(..., description="Probability of choosing the jump strategy", ge=0)
+            reasoning: str = Field(..., description="A short sentence explaining the reasoning behind the chosen probabilities.")
+            def as_normalized_weights(self) -> dict[str, float]:
+                """Return a dict of normalized probabilities that sums to 1."""
+                weights = {
+                    "climb": self.climb,
+                    "drift_up": self.drift_up,
+                    "drift_away": self.drift_away,
+                    "jump": self.jump,
+                }
+                total = sum(weights.values())
+                if total <= 0:
+                    raise ValueError("All probabilities are zero or negative")
+                return {k: v / total for k, v in weights.items()}
+
+        evo_strategist = Agent(
+            "google-gla:gemini-2.5-pro",
+            output_type=StrategyProbs,
+        )
+
         result = await evo_strategist.run(prompt)
+        probs: StrategyProbs = result.output
+
+        weights = probs.as_normalized_weights()
+
+        # Map strategy names to the corresponding coroutine functions
+        strategy_funcs = {
+            "climb": self.agent_climb,
+            "drift_up": self.agent_driftup,
+            "drift_away": self.agent_driftaway,
+            "jump": self.agent_jump,
+        }
+
+        chosen_name = random.choices(
+            population=list(strategy_funcs.keys()),
+            weights=[weights[name] for name in strategy_funcs.keys()],
+            k=1,
+        )[0]
+
+        return await strategy_funcs[chosen_name]()
+
+    async def agent_climb(self):
+        elite_parent = ray.get(self.db.sample_archive_program.remote())
+
+        class StepStatus(str, Enum):
+            pending = "pending"
+            in_progress = "in_progress"
+            completed = "completed"
+            cancelled = "cancelled"
+
+        class Step(BaseModel):
+            status: StepStatus = Field(description="Current status of this step.")
+            description: str = Field(description="Human-readable description of the step.")
+
+        class ClimbContext(BaseModel):
+            parent_program: str = Field(description="The original code of the elite parent program to improve.")
+            program: str = Field(description="Current in progress improved program.")
+            plan: List[Step] = Field(
+                description="Ordered list of steps, each with a status and description."
+            )
+
+        class NoImprovement(BaseModel):
+            reason: str = Field(description="Reason why no improvement was made.")
+
+        evo_coder = Agent[ClimbContext, ImprovedProgram | NoImprovement](
+            "google-gla:gemini-2.5-pro")
+        
+        @evo_coder.tool
+        async def update_plan(ctx: RunContext[ClimbContext], new_plan: List[Step]) -> str:
+            ctx.plan = new_plan
+            return "Plan updated."
+
+        @evo_coder.tool
+        async def evaluate_program(program_code: str) -> str:
+            return "Score: 0.95"  # Placeholder for actual evaluation logic
+
+        @evo_coder.tool
+        async def read_current_program() -> str:
+            return elite_parent.code
+
+        @evo_coder.tool
+        async def apply_patch() -> str:
+            return "Applied patch to the program."
+        
+        new_program = Program()
+
+        await evo_coder.run(coder_prompt)
+            await self.db.add.remote(new_program)
 
 
-    async def agent_improve(self):
-        # TODO: Use condex exec here. 
+    async def agent_driftup(self):
+        pass
+    
+    async def agent_driftaway(self):
         pass
 
-
-    def _submit_new_job(self):
-        """Submit a new job to the queue."""
-        current_gen = ray.get(self.gen.next.remote())
-
-        if current_gen >= self.evo_config.num_generations:
-            return
-
-        exec_fname = (
-            f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
-        )
-        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
-
-        api_costs = 0
-        embed_cost = 0
-        novelty_cost = 0.0
-        # Loop over patch resamples - including parents
-        for resample in range(self.evo_config.max_patch_resamples):
-            (
-                parent_program,
-                archive_programs,
-                top_k_programs,
-            ) = ray.get(self.db.sample.remote(
-                target_generation=current_gen,
-                novelty_attempt=1,
-                max_novelty_attempts=self.evo_config.max_novelty_attempts,
-                resample_attempt=resample + 1,
-                max_resample_attempts=self.evo_config.max_patch_resamples,
-            ))
-            archive_insp_ids = [p.id for p in archive_programs]
-            top_k_insp_ids = [p.id for p in top_k_programs]
-            parent_id = parent_program.id
-            # Run patch (until success with max attempts)
-            code_diff, meta_patch_data, num_applied_attempt = self.run_patch(
-                parent_program,
-                archive_programs,
-                top_k_programs,
-                current_gen,
-                novelty_attempt=1,
-                resample_attempt=resample + 1,
-            )
-            api_costs += meta_patch_data["api_costs"]
-            if (
-                meta_patch_data["error_attempt"] is None
-                and num_applied_attempt > 0
-            ):
-                meta_patch_data["api_costs"] = api_costs
-                break
-
-        # Get the code embedding for the evaluated code
-        code_embedding, e_cost = self.get_code_embedding(exec_fname)
-        embed_cost += e_cost
-
-        # Submit the job asynchronously
-        job_id = self.scheduler.submit_async(exec_fname, results_dir)
-
-        # Add to running jobs queue
-        running_job = RunningJob(
-            job_id=job_id,
-            exec_fname=exec_fname,
-            results_dir=results_dir,
-            start_time=time.time(),
-            generation=current_gen,
-            parent_id=parent_id,
-            archive_insp_ids=archive_insp_ids,
-            top_k_insp_ids=top_k_insp_ids,
-            code_diff=code_diff,
-            meta_patch_data=meta_patch_data,
-            code_embedding=code_embedding,
-            embed_cost=embed_cost,
-            novelty_cost=novelty_cost,
-        )
-        self.running_jobs.append(running_job)
-
-        if self.verbose:
-            logger.info(
-                f"Submitted job for generation {current_gen}, "
-                f"queue size: {len(self.running_jobs)}"
-            )
-
-    def _process_completed_job(self, job: RunningJob):
-        """Process a completed job and add results to database."""
-
-        #debugpy.listen(5678)
-        #debugpy.wait_for_client()
-        #debugpy.breakpoint()  
-
-        end_time = time.time()
-        rtime = end_time - job.start_time
-
-        # Get job results
-        results = self.scheduler.get_job_results(job.job_id, job.results_dir)
-
-        # Read the evaluated code
-        try:
-            evaluated_code = Path(job.exec_fname).read_text(encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"Could not read code for job {job.job_id}. Error: {e}")
-            evaluated_code = ""
-
-        # Use pre-computed embedding and novelty costs
-        code_embedding = job.code_embedding
-        e_cost = job.embed_cost
-        n_cost = job.novelty_cost
-        if self.verbose:
-            logger.debug(
-                f"=> Using pre-computed embedding for job {job.job_id}, "
-                f"embed cost: {e_cost:.4f}, novelty cost: {n_cost:.4f}"
-            )
-
-        correct_val = False
-        metrics_val = {}
-        stdout_log = ""
-        stderr_log = ""
-        if results:
-            correct_val = results.get("correct", {}).get("correct", False)
-            metrics_val = results.get("metrics", {})
-            stdout_log = results.get("stdout_log", "")
-            stderr_log = results.get("stderr_log", "")
-
-        combined_score = metrics_val.get("combined_score", 0.0)
-        public_metrics = metrics_val.get("public", {})
-        private_metrics = metrics_val.get("private", {})
-        text_feedback = metrics_val.get("text_feedback", "")
-
-        # Add the program to the database
-        db_program = Program(
-            id=str(uuid.uuid4()),
-            code=evaluated_code,
-            language=self.evo_config.language,
-            parent_id=job.parent_id,
-            generation=job.generation,
-            archive_inspiration_ids=job.archive_insp_ids,
-            top_k_inspiration_ids=job.top_k_insp_ids,
-            code_diff=job.code_diff,
-            embedding=code_embedding,
-            correct=correct_val,
-            combined_score=combined_score,
-            public_metrics=public_metrics,
-            private_metrics=private_metrics,
-            text_feedback=text_feedback,
-            metadata={
-                "compute_time": rtime,
-                **(job.meta_patch_data or {}),
-                "embed_cost": e_cost,
-                "novelty_cost": n_cost,
-                "stdout_log": stdout_log,
-                "stderr_log": stderr_log,
-            },
-        )
-        ray.get(self.db.add.remote(db_program, verbose=True))
-        ray.get(self.db.save.remote())
-        #self._update_best_solution()
-
-    def run_patch(
-        self,
-        parent_program: Program,
-        archive_programs: List[Program],
-        top_k_programs: List[Program],
-        generation: int,
-        novelty_attempt: int = 1,
-        resample_attempt: int = 1,
-    ) -> tuple[Optional[str], dict, int]:
-        """Run patch generation for a specific generation."""  
-        max_patch_attempts = self.evo_config.max_patch_attempts
-        if self.verbose:
-            logger.info(
-                f"Edit Cycle {generation} -> {generation + 1}, "
-                f"Max Patch Attempts: {max_patch_attempts}"
-            )
-        # Construct edit / code change message
-        patch_sys, patch_msg, patch_type = self.prompt_sampler.sample(
-            parent=parent_program,
-            archive_inspirations=archive_programs,
-            top_k_inspirations=top_k_programs,
-        )
-        if patch_type in ["full", "cross"]:
-            apply_patch = apply_full_patch
-        elif patch_type == "diff":
-            apply_patch = apply_diff_patch
-        elif patch_type == "paper":
-            raise NotImplementedError("Paper edit not implemented.")
-            # apply_patch = apply_paper_patch
-        else:
-            raise ValueError(f"Invalid patch type: {patch_type}")
-
-        total_costs = 0
-        msg_history = []
-        #debugpy.listen(5678)
-        #debugpy.wait_for_client()
-        #debugpy.breakpoint()      
-        llm_kwargs = self.llm.get_kwargs()
-        code_diff = None  # Initialize code_diff
-        num_applied_attempt = 0  # Initialize num_applied_attempt
-        error_attempt = (
-            "Max attempts reached without successful patch."  # Default error
-        )
-        patch_name = None
-        patch_description = None
-        output_path_attempt = None
-        patch_txt_attempt = None
-        patch_path = None
-        diff_summary = {}
-
-        for patch_attempt in range(max_patch_attempts):
-            if "max_tokens" in llm_kwargs:
-                del llm_kwargs["max_tokens"]
-            response = self.llm.query(
-                msg=patch_msg,
-                system_msg=patch_sys,
-                msg_history=msg_history,
-                llm_kwargs=llm_kwargs,
-            )
-            # print(response.content)
-            if response is None or response.content is None:
-                if self.verbose:
-                    logger.info(
-                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} FAILURE. "
-                        f"Error: LLM response content was None."
-                    )
-                # Prepare for next attempt or exit
-                error_attempt = "LLM response content was None."
-                num_applied_attempt = 0
-                patch_txt_attempt = None
-                if patch_attempt < max_patch_attempts - 1:
-                    patch_msg = (
-                        "The previous attempt to get an edit was not "
-                        "successful because the LLM response was empty. "
-                        "Try again."
-                    )
-                    if response:
-                        msg_history = response.new_msg_history
-                    continue
-                else:  # Last attempt
-                    break
-
-            total_costs += response.cost  # Acc. cost
-            patch_name = extract_between(
-                response.content,
-                "<NAME>",
-                "</NAME>",
-                False,
-            )
-            patch_description = extract_between(
-                response.content,
-                "<DESCRIPTION>",
-                "</DESCRIPTION>",
-                False,
-            )
-
-            # Apply the code patch (diff/full rewrite)
-            (
-                _,
-                num_applied_attempt,
-                output_path_attempt,
-                error_attempt,
-                patch_txt_attempt,
-                patch_path,
-            ) = apply_patch(
-                original_str=parent_program.code,
-                patch_str=response.content,
-                patch_dir=f"{self.results_dir}/{FOLDER_PREFIX}_{generation}",
-                language=self.evo_config.language,
-                verbose=False,
-            )
-
-            if error_attempt is None and num_applied_attempt > 0:
-                if patch_path:  # Ensure patch_path is not None
-                    diff_summary = summarize_diff(
-                        str(patch_path)
-                    )  # Convert Path to str
-                if self.verbose:
-                    logger.info(
-                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} SUCCESS. "
-                        f"Output: {output_path_attempt}, "
-                        f"Patches Applied: {num_applied_attempt}."
-                    )
-
-                code_diff = patch_txt_attempt
-                break  # Break from patch attempts
-            else:
-                error_str = (
-                    str(error_attempt) if error_attempt else "No changes applied."
-                )
-                patch_msg = (
-                    "The previous edit was not successful."
-                    + " This was the error message: \n\n"
-                    + error_str
-                    + "\n\n Try again."
-                )
-                if self.verbose:
-                    logger.info(
-                        f"  PATCH ATTEMPT {patch_attempt + 1}/{max_patch_attempts} FAILURE. "
-                        f"Error: '{error_str}', "
-                        f"Patches Applied: {num_applied_attempt}."
-                    )
-                msg_history = response.new_msg_history
-                code_diff = None
-                if patch_attempt == max_patch_attempts - 1:  # Last attempt failed
-                    # error_attempt is already set from apply_patch or default
-                    pass
-
-        # Only consider the diff summary for the original source file
-        original_filename = f"original.{self.lang_ext}"
-        if original_filename in diff_summary:
-            diff_summary = diff_summary[original_filename]
-
-        meta_edit_data = {
-            "patch_type": patch_type,
-            "api_costs": total_costs,
-            "num_applied": num_applied_attempt,
-            "patch_name": patch_name,
-            "patch_description": patch_description,
-            "error_attempt": error_attempt,
-            "novelty_attempt": novelty_attempt,
-            "resample_attempt": resample_attempt,
-            "patch_attempt": patch_attempt + 1,
-            **llm_kwargs,
-            "llm_result": response.to_dict() if response else None,
-            "diff_summary": diff_summary,
-        }
-        if self.verbose and num_applied_attempt > 0:
-            self._print_metadata_table(meta_edit_data, generation)
-        # Delete generation from meta_edit_data
-        return code_diff, meta_edit_data, num_applied_attempt
-
-    def get_code_embedding(self, exec_fname: str) -> tuple[List[float], float]:
-        """Get the embedding of the code."""
-        # Read the evaluated code
-        try:
-            evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
-            evaluated_code = ""
-        if evaluated_code != "":
-            # Get the embedding of the initial program
-            try:
-                if self.embedding is not None:
-                    redacted_code = redact_immutable(evaluated_code, no_state=True)
-                    if self.verbose:
-                        logger.debug(
-                            "=> EMBED: Code length - "
-                            f"Original: {len(evaluated_code)} - "
-                            f"Redacted: {len(redacted_code)}"
-                        )
-
-                    embedding_result, e_cost = self.embedding.get_embedding(
-                        redacted_code
-                    )
-                else:
-                    if self.verbose:
-                        logger.debug("=> EMBED: No embedding model configured.")
-                    embedding_result = []
-                    e_cost = 0.0
-                code_embedding = cast(List[float], embedding_result)
-            except Exception as e:
-                logger.warning(f"Could not embed code for job {exec_fname}. Error: {e}")
-                code_embedding = []
-                e_cost = 0.0
-        else:
-            code_embedding = []
-            e_cost = 0.0
-        return code_embedding, e_cost
-
-    def _print_metadata_table(self, meta_data: dict, generation: int):
-        """Display metadata in a formatted rich table."""
-        # Create title with generation and attempt information
-        title_parts = ["[bold magenta]Patch Metadata"]
-
-        # Add generation if present
-        if generation is not None:
-            title_parts.append(
-                f" - Gen {generation}/{self.evo_config.num_generations} - Novelty: {meta_data['novelty_attempt']}/{self.evo_config.max_novelty_attempts} - Resample: {meta_data['resample_attempt']}/{self.evo_config.max_patch_resamples} - Patch: {meta_data['patch_attempt']}/{self.evo_config.max_patch_attempts}"
-            )
-
-        # Add attempt information if present
-        if all(
-            key in meta_data
-            for key in [
-                "novelty_attempt",
-                "resample_attempt",
-                "patch_attempt",
-                "generation",
-            ]
-        ):
-            title_parts.append(
-                f" (Novelty: {meta_data['novelty_attempt']}, "
-                f"Resample: {meta_data['resample_attempt']}, "
-                f"Patch: {meta_data['patch_attempt']})"
-            )
-
-        title_parts.append("[/bold magenta]")
-        table = Table(
-            title="".join(title_parts),
-            show_header=True,
-            header_style="bold cyan",
-            border_style="magenta",
-            box=rich.box.ROUNDED,
-            width=120,  # Match display.py table width
-        )
-        table.add_column("Field", style="cyan bold", no_wrap=True, width=25)
-        table.add_column("Value", style="green", overflow="fold", width=90)
-
-        # Define display order and formatting for specific fields
-        display_order = [
-            "patch_type",
-            "patch_name",
-            "patch_description",
-            "num_applied",
-            "api_costs",
-            "error_attempt",
-        ]
-
-        # Add ordered fields first
-        for field_name in display_order:
-            if field_name in meta_data:
-                value = meta_data[field_name]
-                if value is None:
-                    formatted_value = "[dim]None[/dim]"
-                elif field_name == "api_costs":
-                    formatted_value = f"${value:.4f}"
-                elif field_name == "error_attempt" and value is None:
-                    formatted_value = "[green]Success[/green]"
-                elif field_name == "error_attempt":
-                    formatted_value = (
-                        f"[red]{str(value)[:100]}...[/red]"
-                        if len(str(value)) > 100
-                        else f"[red]{value}[/red]"
-                    )
-                else:
-                    formatted_value = str(value)
-
-                table.add_row(field_name, formatted_value)
-
-        # Add remaining fields (excluding llm_result, diff_summary, and header info)
-        skip_fields = set(
-            display_order
-            + [
-                "llm_result",
-                "diff_summary",
-                "generation",
-                "novelty_attempt",
-                "resample_attempt",
-                "patch_attempt",
-            ]
-        )
-        for field_key, field_value in meta_data.items():
-            if field_key not in skip_fields:
-                if field_value is None:
-                    formatted_value = "[dim]None[/dim]"
-                else:
-                    formatted_value = (
-                        str(field_value)[:100] + "..."
-                        if len(str(field_value)) > 100
-                        else str(field_value)
-                    )
-                table.add_row(field_key, formatted_value)
-
-        # Add diff summary if available
-        if "diff_summary" in meta_data and meta_data["diff_summary"]:
-            diff_summary = meta_data["diff_summary"]
-            if isinstance(diff_summary, dict):
-                summary_text = ""
-                for k, v in diff_summary.items():
-                    summary_text += f"{k}: {v}; "
-                table.add_row("diff_summary", summary_text.strip())
-            else:
-                table.add_row("diff_summary", str(diff_summary)[:200])
-
-        self.console.print(table)
-
-
+    async def agent_jump(self):
+        pass

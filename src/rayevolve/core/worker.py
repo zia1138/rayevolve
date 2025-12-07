@@ -152,13 +152,13 @@ class EvoWorker:
         """Submit a new job to the queue."""
         current_gen = ray.get(self.gen.next.remote())
 
-        if current_gen == 5: 
+        if current_gen == 10: 
             debugpy.listen(5678)
             debugpy.wait_for_client()
             debugpy.breakpoint()   
             best_score_table = ray.get(self.db.get_best_score_table.remote())
             template = textwrap.dedent("""
-                You are the Strategic Supervisor for an evolutionary code optimization system.
+                You are the strategic supervisor for an evolutionary code optimization system.
                 Your job is to set the probability distribution for the next worker based on the current progress trend.
 
                 ### CURRENT STATUS (Best Score History)
@@ -169,19 +169,20 @@ class EvoWorker:
                 ### ANALYSIS RULES (Focus on the most recent entries in the table)
                 1. **Analyze Velocity:** Is the score rising quickly, slowly, or flatlining?
                 2. **Analyze Stagnation:**
-                - If it is early in the simulation, **stagnation cannot be definitively detected**. Prioritize initial exploration.
-                - Compare the current rate of improvement (or lack thereof) to previous periods of successful growth.
+                - If it is early in the simulation, **stagnation cannot be definitively detected**. Prioritize climbing until 
+                  there is evidence of stagnation.                      
+                - Compare the current rate of improvement (or lack thereof) to previous periods of successful increase in the best score.
                 - Determine if the current trend is significantly slower or has completely flattened compared to historical bests. 
-                    This establishes whether true stagnation or just slower growth is occurring.
+                  This establishes whether true stagnation or just slower growth is occurring.
 
                 ### STRATEGY DEFINITIONS
-                1. **CLIMB (Exploit):** Best when **Velocity is HIGH**.
-                - Focuses on rigorously exploiting the current best code to achieve further, direct score improvements.
-                2. **DRIFT UP (Exploit/Explore):** Best when **Velocity is SLOW**.
+                1. **CLIMB (Exploit):** Best when velocity is high and the score is improving.
+                - Focuses on rigorously exploiting the current best solutions to achieve further, direct score improvements.
+                2. **DRIFT UP (Exploit/Explore):** Best when velocity is slow.
                 - Targets non-elite parents with potential, seeking to improve them and discover adjacent, potentially higher, peaks.
-                3. **DRIFT AWAY (Explore):** Best when **Stuck (Short Term)**.
+                3. **DRIFT AWAY (Explore):** Best when stuck (short term).
                 - Ignores score improvement. Tries to gradually change approach significantly while maintaining correctness, to escape local optima.
-                4. **JUMP (Radical):** Best when **Stuck (Long Term)**.
+                4. **JUMP (Radical):** Best when stuck (long term).
                 - Generates fresh approaches that differ from current set of elites to explore new areas of the solution space.
             """)
             prompt = template.format(best_score_table=best_score_table)

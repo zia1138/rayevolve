@@ -49,6 +49,38 @@ def clean_nan_values(obj: Any) -> Any:
     else:
         return obj
 
+def sample_with_powerlaw(items: list, alpha: float = 1.0) -> int:
+    """
+    Sample an index from a list of items using a power law distribution
+    based on their rank (order in the list).
+
+    Parameters
+    ----------
+    items : list
+        List of items to sample from (order implies rank, e.g., best first).
+    alpha : float, default=1.0
+        Power law exponent.
+        - alpha = 0: uniform sampling
+        - alpha > 0: items earlier in the list (higher rank) are sampled more.
+        - alpha < 0: items later in the list (lower rank) are sampled more.
+
+    Returns
+    -------
+    int
+        Index of the sampled item from the input list.
+    """
+    if not items:
+        raise ValueError("Empty items list for power-law sampling")
+
+    # Probabilities based on rank (index + 1)
+    probs = np.array([(i + 1) ** (-alpha) for i in range(len(items))])
+    if np.sum(probs) == 0:  # Avoid div by zero if all probs are zero
+        # Fallback to uniform if power law results in all zero probabilities
+        probs = np.ones(len(items))
+
+    probs = probs / probs.sum()  # Normalize
+    logger.info(f"Power law probs: {probs.tolist()}")
+    return np.random.choice(len(items), p=probs)
 
 @dataclass
 class DatabaseConfig:
@@ -817,6 +849,38 @@ class ProgramDatabase:
         self.cursor.execute("SELECT * FROM programs WHERE id = ?", (program_id,))
         row = self.cursor.fetchone()
         return self._program_from_row(row)
+
+    @db_retry()
+    def sample_archive_program(self) -> Optional[Program]:
+        if not self.cursor:
+            raise ConnectionError("DB not connected.")
+        
+        self.cursor.execute("SELECT program_id FROM archive")
+        archived_rows = self.cursor.fetchall()
+        if not archived_rows:
+            return None
+        
+        archived_program_ids = [row["program_id"] for row in archived_rows]
+
+        # Fetch Program objects. This could be slow if archive is huge.
+        # Consider optimizing if performance becomes an issue.
+        archived_programs = []
+        for prog_id in archived_program_ids:
+            prog = self.get(prog_id)
+            if prog:
+                archived_programs.append(prog) 
+        
+            # Sort by combined_score descending (best first)
+            archived_programs.sort(
+                key=lambda p: p.combined_score or 0.0, reverse=True
+            )
+ 
+            alpha = getattr(self.config, "exploitation_alpha", 1.0)
+            sampled_idx = sample_with_powerlaw(archived_programs, alpha)
+            selected_prog = archived_programs[sampled_idx]
+            pid = selected_prog.id
+
+        return self.get(pid)
 
     @db_retry()
     def sample(

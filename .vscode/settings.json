@@ -1,12 +1,15 @@
 {
     "python-envs.pythonProjects": [],
     "files.exclude": {
-        "**/__pycache__": true
+        "**/__pycache__": true,
+        ".venv": true
     },
     "search.exclude": {
-        "**/__pycache__": true
+        "**/__pycache__": true,
+        ".venv": true
     },
     "files.watcherExclude": {
-        "**/__pycache__": true
+        "**/__pycache__": true,
+        ".venv/**": true      // or ".venv": true both are fine
     }
 }

@@ -1,4 +1,5 @@
 import random
+from sys import stdout
 import uuid
 import time
 import logging
@@ -62,8 +63,31 @@ class StrategyProbs(BaseModel):
             raise ValueError("All probabilities are zero or negative")
         return {k: v / total for k, v in weights.items()}
 
+
+
+class ExperimentEntry(BaseModel):
+    idea: str = Field(description="Brief description of the experiment idea.")
+    outcome: str = Field(description="Outcome or observation from running the experiment.")
+
+class ClimbContext(BaseModel):
+    parent_score: float = Field(description="Score of the parent program being improved.")
+    experiment_log: List["ExperimentEntry"] = Field(
+        default_factory=list,
+        description="Ordered log of experiments conducted and their outcomes."
+    )
+    
+class GiveUp(BaseModel):
+    """Unable to improve the parent program."""
+
+class ImprovedProgram(BaseModel):
+    """Code of the improved program and its score."""
+    improved_code: str = Field(description="The improved program code.")
+    score: float = Field(description="The score of the improved program.")
+
+
 @ray.remote
 class EvoGen:
+    """Keeps track of the current generation number."""
     def __init__(self, initial=0):
         self.generation = initial
 
@@ -113,17 +137,27 @@ class EvoWorker:
         # Initialize rich console for formatted output
         self.console = Console()
 
+        if self.evo_config.language == "cuda":
+            self.lang_ext = "cu"
+        elif self.evo_config.language == "cpp":
+            self.lang_ext = "cpp"
+        elif self.evo_config.language == "python":
+            self.lang_ext = "py"
+        elif self.evo_config.language == "rust":
+            self.lang_ext = "rs"
+        else:
+            msg = f"Language {self.evo_config.language} not supported"
+            raise ValueError(msg)
 
-    async def run(self):
-        #debugpy.listen(5678)
-        #debugpy.wait_for_client()
-        #debugpy.breakpoint()              
+    def run(self):
+         
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            await self.run_strategy()
+            #await self.run_strategy(current_gen)
+            self.agent_climb(current_gen)
 
-    async def run_strategy(self):            
-        best_score_table = await self.db.get_best_score_table.remote() 
+    def run_strategy(self, current_gen: int):            
+        best_score_table = ray.get(self.db.get_best_score_table.remote()) 
 
         template = textwrap.dedent("""
             You are the strategic supervisor for an evolutionary code optimization system.
@@ -165,12 +199,8 @@ class EvoWorker:
             - "jump": float
         """
 
-        evo_strategist = Agent(
-            "google-gla:gemini-2.5-pro",
-            output_type=StrategyProbs,
-        )
-
-        result = await evo_strategist.run(prompt)
+        evo_strategist = Agent("google-gla:gemini-2.5-pro", output_type=StrategyProbs)
+        result = evo_strategist.run_sync(prompt)
         probs: StrategyProbs = result.output
 
         weights = probs.as_normalized_weights()
@@ -189,64 +219,133 @@ class EvoWorker:
             k=1,
         )[0]
 
-        return await strategy_funcs[chosen_name]()
+        return strategy_funcs[chosen_name](current_gen)
 
-    async def agent_climb(self):
-        elite_parent = await self.db.sample_archive_program.remote()
+    def agent_climb(self, current_gen: int):
+
+        exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
+        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+        elite_parent = ray.get(self.db.sample_archive_program.remote())
         if not elite_parent:
             return
-
-        class StepStatus(str, Enum):
-            pending = "pending"
-            in_progress = "in_progress"
-            completed = "completed"
-            cancelled = "cancelled"
-
-        class Step(BaseModel):
-            status: StepStatus = Field(description="Current status of this step.")
-            description: str = Field(description="Human-readable description of the step.")
-
-        class ClimbContext(BaseModel):
-            parent_program: str = Field(description="The original code of the elite parent program to improve.")
-            program: str = Field(description="Current in progress improved program.")
-            plan: List[Step] = Field(
-                description="Ordered list of steps, each with a status and description."
-            )
-
-        class NoImprovement(BaseModel):
-            reason: str = Field(description="Reason why no improvement was made.")
-
-        evo_coder = Agent[ClimbContext, ImprovedProgram | NoImprovement](
-            "google-gla:gemini-2.5-pro")
         
-        @evo_coder.tool
-        async def update_plan(ctx: RunContext[ClimbContext], new_plan: List[Step]) -> str:
-            ctx.plan = new_plan
-            return "Plan updated."
+        coder_template = textwrap.dedent("""
+            Given the code of the following elite program:
+            ```{lang}                             
+            {code}
+            ```
+            This elite program achieved the following score:
+            {score}
+
+            Your task is to improve this program further. Make changes to the code
+            to conduct experiments that improve its score.
+            The improvements should aim to increase the score beyond {score}. 
+            Keep track of your experiments and learn from them recording why you think each experiment succeeded or failed.
+            Keep the markers "EVOLVE-BLOCK-START" and "EVOLVE-BLOCK-END" in the code. Do not change the code outside of these markers.
+            If after several attempts you cannot improve the score, you should give up.
+        """)
+        coder_prompt = coder_template.format(lang=self.evo_config.language, 
+                                             code=elite_parent.code, 
+                                             score=elite_parent.combined_score)
+
+
+        evo_coder = Agent[ClimbContext, ImprovedProgram | GiveUp](
+            "google-gla:gemini-2.5-flash")
 
         @evo_coder.tool
-        async def evaluate_program(program_code: str) -> str:
-            return "Score: 0.95"  # Placeholder for actual evaluation logic
+        def run_experiment(ctx: RunContext[ClimbContext], program: str) -> str:
+            Path(exec_fname).write_text(program, "utf-8")
+            start_time = time.time()
+            job_id = self.scheduler.submit_async(exec_fname, results_dir)
+            results = self.scheduler.get_job_results(job_id, results_dir)
+            rtime = time.time() - start_time
+             
+            out_str = ""
+            if results["correct"]:
+                out_str += "The program executed correctly and produced a valid result.\n"
+                out_str += f"It achieved a score of {results['metrics']['combined_score']}\n"
+                if results['metrics']['combined_score'] > ctx.deps.parent_score:
+                    out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
+                else:
+                    out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
+            else:
+                out_str += "The program did not execute correctly and did not produce a valid result.\n"
+                
+            out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
+            out_str += "Here is the standard output of the program:\n"
+            out_str += "```"
+            out_str += results["stdout_log"] + "\n"
+            out_str += "```\n"
+            out_str += "Here is the standard error output of the program:\n"
+            out_str += "```"
+            out_str += results["stderr_log"] + "\n"
+            out_str += "```\n"
+            return out_str
 
         @evo_coder.tool
-        async def read_current_program() -> str:
-            return elite_parent.code
+        def log_experiment(ctx: RunContext[ClimbContext], idea: str, outcome: str) -> str:
+            ctx.deps.experiment_log.append(ExperimentEntry(idea=idea, outcome=outcome))
+            log_str = "Experiments conducted so far:\n\n"
+            for idx, entry in enumerate(ctx.deps.experiment_log):
+                log_str += f"Experiment {idx+1}:\n"
+                log_str += f"Idea: {entry.idea}\n"
+                log_str += f"Outcome: {entry.outcome}\n\n"
+            return log_str
 
-        @evo_coder.tool
-        async def apply_patch() -> str:
-            return "Applied patch to the program."
+        debugpy.listen(5678)
+        debugpy.wait_for_client()
+        debugpy.breakpoint()                 
+        res = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_score=elite_parent.combined_score))
         
-        new_program = Program()
+        # Add the program to the database
+        db_program = Program(
+            id=str(uuid.uuid4()),
+            code=res.code,
+            language=self.evo_config.language,
+            parent_id=elite_parent.parent_id,
+            generation=current_gen,
+            code_diff="agent_climb",
+            embedding=[],
+            correct=True,
+            combined_score=res.score
+        )
+        ray.get(self.db.add.remote(db_program))
 
-        await evo_coder.run(coder_prompt)
-            await self.db.add.remote(new_program)
 
-
-    async def agent_driftup(self):
+    def agent_driftup(self, current_gen: int):
         pass
     
-    async def agent_driftaway(self):
+    def agent_driftaway(self, current_gen: int):
         pass
 
-    async def agent_jump(self):
+    def agent_jump(self, current_gen: int):
         pass
+
+
+    def get_code_embedding(self, exec_fname: str) -> tuple[List[float], float]:
+        """Get the embedding of the code."""
+        try:
+            evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
+        except Exception as e:
+            evaluated_code = ""
+        if evaluated_code != "":
+            # Get the embedding of the initial program
+            try:
+                if self.embedding is not None:
+                    redacted_code = redact_immutable(evaluated_code, no_state=True)
+                    embedding_result, e_cost = self.embedding.get_embedding(
+                        redacted_code
+                    )
+                else:
+                    embedding_result = []
+                    e_cost = 0.0
+                code_embedding = cast(List[float], embedding_result)
+            except Exception as e:
+                code_embedding = []
+                e_cost = 0.0
+        else:
+            code_embedding = []
+            e_cost = 0.0
+        return code_embedding, e_cost

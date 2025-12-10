@@ -122,16 +122,10 @@ class JobScheduler:
         self, job_id: Union[str, ProcessWithLogging], results_dir: str
     ) -> Optional[Dict[str, Any]]:
         """Get results from a completed job."""
-        if self.job_type in ["slurm_docker", "slurm_conda"]:
-            if isinstance(job_id, str):
-                return monitor_slurm(job_id, results_dir, verbose=self.verbose)
-        else:
-            if isinstance(job_id, ProcessWithLogging):
-                job_id.wait()
-                return monitor_local(
-                    job_id,
-                    results_dir,
-                    verbose=self.verbose,
-                    timeout=self.config.time,
-                )
-        return None
+        job_id.wait()
+        return monitor_local(
+            job_id,
+            results_dir,
+            verbose=self.verbose,
+            timeout=self.config.time,
+        )

@@ -18,7 +18,7 @@ import ray
 import asyncio
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
-from .worker import EvoWorker, EvoGen
+from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 from rayevolve.llm import (
     LLMClient,
@@ -201,9 +201,9 @@ class EvolutionRunner:
         gen = EvoGen.remote()  # generation counter
 
         all_refs = []
-        num_workers = 12
-        batch_size = 12
-        delay_between_batches = 1 * 60  # 1 minute in seconds
+        num_workers = 1
+        batch_size = 1
+        delay_between_batches = 0  # 1 minute in seconds
 
         for batch_start in range(0, num_workers, batch_size):
             # Launch this batch 

@@ -38,6 +38,7 @@ import debugpy
 import textwrap
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelMessage, RunContext, RunUsage, UsageLimits
+import logfire
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -148,9 +149,12 @@ class EvoWorker:
         else:
             msg = f"Language {self.evo_config.language} not supported"
             raise ValueError(msg)
+        
+        logfire.configure()
+        logfire.instrument_pydantic_ai()
 
     def run(self):
-         
+                 
         while True:
             current_gen = ray.get(self.gen.next.remote())
             #await self.run_strategy(current_gen)
@@ -256,6 +260,9 @@ class EvoWorker:
 
         @evo_coder.tool
         def run_experiment(ctx: RunContext[ClimbContext], program: str) -> str:
+            """Call this tool with a novel program that you want to evaluate. It will return
+            the results of executing the program including its score and correctness.
+            """
             Path(exec_fname).write_text(program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
@@ -286,6 +293,8 @@ class EvoWorker:
 
         @evo_coder.tool
         def log_experiment(ctx: RunContext[ClimbContext], idea: str, outcome: str) -> str:
+            """Call this tool after each experiment to log your idea and its outcome.
+            This will help you keep track of what you've tried and what worked or didn't work."""
             ctx.deps.experiment_log.append(ExperimentEntry(idea=idea, outcome=outcome))
             log_str = "Experiments conducted so far:\n\n"
             for idx, entry in enumerate(ctx.deps.experiment_log):

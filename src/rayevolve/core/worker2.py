@@ -78,10 +78,10 @@ class ClimbContext(BaseModel):
     )
     
 class GiveUp(BaseModel):
-    """Unable to improve the parent program."""
+    """Use this when you are unable to improve the parent program."""
 
 class ImprovedProgram(BaseModel):
-    """Code of the improved program and its score."""
+    """Use this when you have successfully improved the parent program."""
     improved_code: str = Field(description="The improved program code.")
     score: float = Field(description="The score of the improved program.")
 
@@ -248,7 +248,8 @@ class EvoWorker:
             The improvements should aim to increase the score beyond {score}. 
             Keep track of your experiments and learn from them recording why you think each experiment succeeded or failed.
             Keep the markers "EVOLVE-BLOCK-START" and "EVOLVE-BLOCK-END" in the code. Do not change the code outside of these markers.
-            If after several attempts you cannot improve the score, you should give up.
+            If after 2 attempts you cannot improve the score, you should give up.
+            If you improve the score return the improved code and its new score.
         """)
         coder_prompt = coder_template.format(lang=self.evo_config.language, 
                                              code=elite_parent.code, 
@@ -256,7 +257,10 @@ class EvoWorker:
 
 
         evo_coder = Agent[ClimbContext, ImprovedProgram | GiveUp](
-            "google-gla:gemini-2.5-flash")
+            "google-gla:gemini-2.5-flash",
+            deps_type=ClimbContext,
+            output_type= ImprovedProgram | GiveUp
+            )
 
         @evo_coder.tool
         def run_experiment(ctx: RunContext[ClimbContext], program: str) -> str:
@@ -306,21 +310,22 @@ class EvoWorker:
         debugpy.listen(5678)
         debugpy.wait_for_client()
         debugpy.breakpoint()                 
-        res = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_score=elite_parent.combined_score))
+        agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_score=elite_parent.combined_score))
         
-        # Add the program to the database
-        db_program = Program(
-            id=str(uuid.uuid4()),
-            code=res.code,
-            language=self.evo_config.language,
-            parent_id=elite_parent.parent_id,
-            generation=current_gen,
-            code_diff="agent_climb",
-            embedding=[],
-            correct=True,
-            combined_score=res.score
-        )
-        ray.get(self.db.add.remote(db_program))
+        if isinstance(agent_result.output, ImprovedProgram):
+            # Add the program to the database
+            db_program = Program(
+                id=str(uuid.uuid4()),
+                code=agent_result.output.improved_code,
+                language=self.evo_config.language,
+                parent_id=elite_parent.parent_id,
+                generation=current_gen,
+                code_diff="agent_climb",
+                embedding=[],
+                correct=True,
+                combined_score=agent_result.output.score,
+            )
+            ray.get(self.db.add.remote(db_program))
 
 
     def agent_driftup(self, current_gen: int):

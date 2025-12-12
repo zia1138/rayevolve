@@ -81,7 +81,7 @@ class GiveUp(BaseModel):
     """Use this when you are unable to improve the parent program."""
 
 class ImprovedProgram(BaseModel):
-    """Use this when you have successfully improved the parent program."""
+    """Use this when you have successfully improved the parent program in one of your experiments."""
     improved_code: str = Field(description="The improved program code.")
     score: float = Field(description="The score of the improved program.")
 
@@ -234,23 +234,39 @@ class EvoWorker:
         elite_parent = ray.get(self.db.sample_archive_program.remote())
         if not elite_parent:
             return
-        
+                
         coder_template = textwrap.dedent("""
-            Given the code of the following elite program:
+            You are an Expert Optimization Engineer refining an elite solution.
+            
+            ### MISSION
+            The code below has achieved a score of **{score}**. Your goal is to beat this score.
+           
+            ### CODE
             ```{lang}                             
             {code}
             ```
-            This elite program achieved the following score:
-            {score}
+ 
+            ### PROTOCOL
+            You must follow the **Scientific Method**:
+            1. **Analyze:** Use the code for inspiration and come up with an approach to improve the score.
+            2. **Experiment:** Write the code to implement your idea.
+            3. **Evaluate:** Use `run_experiment` to get the score.
+            4. **Log:** Use `log_experiment` to record the outcome of your idea and analyze *why* 
+               the score improved or got worse to inform your next attempt.
+             
+            ### CONSTRAINTS
+            - **Persistence:** Do not give up. Use the feedback to improve your code.
+            - **Efficiency:** You have a maximum of 5 attempts.
+            - You must `run_experiment` before `log_experiment` for each hypothesis.                             
+                                         
+            - **Safety:** Keep the markers "EVOLVE-BLOCK-START" and "EVOLVE-BLOCK-END" in the code. Do not change the code outside of these markers.
+ 
+            ### COMPLETION
+            - If you achieve `new_score > {score}`, keep trying to improve the score for up to
+              5 hypotheses total, then return `ImprovedProgram` with your best code and score.                                                                      
+            - If you cannot beat the score after 5 distinct hypotheses, return `GiveUp`.
+         """)
 
-            Your task is to improve this program further. Make changes to the code
-            to conduct experiments that improve its score.
-            The improvements should aim to increase the score beyond {score}. 
-            Keep track of your experiments and learn from them recording why you think each experiment succeeded or failed.
-            Keep the markers "EVOLVE-BLOCK-START" and "EVOLVE-BLOCK-END" in the code. Do not change the code outside of these markers.
-            If after 2 attempts you cannot improve the score, you should give up.
-            If you improve the score return the improved code and its new score.
-        """)
         coder_prompt = coder_template.format(lang=self.evo_config.language, 
                                              code=elite_parent.code, 
                                              score=elite_parent.combined_score)
@@ -258,9 +274,9 @@ class EvoWorker:
 
         evo_coder = Agent[ClimbContext, ImprovedProgram | GiveUp](
             "google-gla:gemini-2.5-flash",
+            system_prompt=self.evo_config.task_sys_msg,
             deps_type=ClimbContext,
-            output_type= ImprovedProgram | GiveUp
-            )
+            output_type= ImprovedProgram | GiveUp)
 
         @evo_coder.tool
         def run_experiment(ctx: RunContext[ClimbContext], program: str) -> str:
@@ -274,16 +290,20 @@ class EvoWorker:
             rtime = time.time() - start_time
              
             out_str = ""
-            if results["correct"]:
+            if results.get("correct"):
                 out_str += "The program executed correctly and produced a valid result.\n"
-                out_str += f"It achieved a score of {results['metrics']['combined_score']}\n"
-                if results['metrics']['combined_score'] > ctx.deps.parent_score:
-                    out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
+                combined = results.get("metrics", {}).get("combined_score")
+                if combined is not None:
+                    out_str += f"It achieved a score of {combined}\n"
+                    if combined > ctx.deps.parent_score:
+                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
+                    else:
+                        out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
                 else:
-                    out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
+                    out_str += "Something happened and the score was not available in results.\n"
             else:
                 out_str += "The program did not execute correctly and did not produce a valid result.\n"
-                
+        
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
             out_str += "Here is the standard output of the program:\n"
             out_str += "```"
@@ -307,9 +327,9 @@ class EvoWorker:
                 log_str += f"Outcome: {entry.outcome}\n\n"
             return log_str
 
-        debugpy.listen(5678)
-        debugpy.wait_for_client()
-        debugpy.breakpoint()                 
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()                 
         agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_score=elite_parent.combined_score))
         
         if isinstance(agent_result.output, ImprovedProgram):
@@ -318,7 +338,7 @@ class EvoWorker:
                 id=str(uuid.uuid4()),
                 code=agent_result.output.improved_code,
                 language=self.evo_config.language,
-                parent_id=elite_parent.parent_id,
+                parent_id=elite_parent.id,
                 generation=current_gen,
                 code_diff="agent_climb",
                 embedding=[],

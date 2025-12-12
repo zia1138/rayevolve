@@ -2,14 +2,17 @@
     "python-envs.pythonProjects": [],
     "files.exclude": {
         "**/__pycache__": true,
-        ".venv": true
+        ".venv": true,
+        ".logfire": true        
     },
     "search.exclude": {
         "**/__pycache__": true,
-        ".venv": true
+        ".venv": true,
+        ".logfire": true
     },
     "files.watcherExclude": {
         "**/__pycache__": true,
-        ".venv/**": true      // or ".venv": true both are fine
+        ".venv/**": true,      // or ".venv": true both are fine
+        ".logfire": true
     }
 }

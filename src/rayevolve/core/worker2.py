@@ -285,9 +285,14 @@ class EvoWorker:
             - **Persistence:** Do not give up. Use the feedback to improve your code.
             - **Efficiency:** You have a maximum of 5 attempts.
             - You must `run_experiment` before `log_experiment` for each hypothesis.                             
-            - **Safety:** You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
-              and above a line containing "EVOLVE-BLOCK-END". Everything outside those markers is read-only 
-              and must be kept as-is.                                         
+            - **Safety:** 
+              - You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
+                and above a line containing "EVOLVE-BLOCK-END". 
+                You must NOT remove or modify any code outside these tags.
+                You must NOT remove the tags themselves.                         
+              - Make sure your rewritten program maintains the same inputs and outputs as the original program, 
+                but with a novel internal implementation.
+              - Make sure the file still runs after your changes.                        
 
             ### COMPLETION
             - If you achieve `new_score > {score}`. Stop and return `ImprovedProgram` with your best code and score.                                                                      
@@ -422,10 +427,16 @@ class EvoWorker:
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to help you identify a novel approach.
             - **Efficiency:** You have a maximum of 5 attempts.
-            - **Safety:** You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
-              and above a line containing "EVOLVE-BLOCK-END". Everything outside those markers is read-only 
-              and must be kept as-is.
-                                         
+            - **Safety:** 
+              - You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
+                and above a line containing "EVOLVE-BLOCK-END". 
+                You must NOT remove or modify any code outside these tags.
+                You must NOT remove the tags themselves.                         
+              - Make sure your rewritten program maintains the same inputs and outputs as the original program, 
+                but with a novel internal implementation.
+              - Make sure the file still runs after your changes.
+
+                                                      
             ### COMPLETION
             - If you succeed in finding a correct and novel program return `NovelProgram` with your code.
             - If you cannot find a correct and novel program after 5 attempts, return `GiveUp`.
@@ -471,18 +482,21 @@ class EvoWorker:
                                               proposed_program=novel_code,
                                               change_type=change_type,
                                               lang=self.evo_config.language)
-            r = evo_diff.run(diff_prompt)
+            r = evo_diff.run_sync(diff_prompt)
             return r.output             
 
         @evo_coder.tool
         def check_correctness(ctx: RunContext[DriftContext], program: str, change_type:str) -> str:
             """Call this tool with a novel program that you want to check for correctness and a description
-            of the change type you made. It will return the results of executing the program including its correctness 
+            of the change type you made. It will return the results of executing the program including its correctness. 
             It will check that the change type you provided was applied and if the program is substantially different from the parent.
             """
             debugpy.listen(5678)
             debugpy.wait_for_client()
             debugpy.breakpoint()   
+            # TODO: Add some code to verify code before EVOLVE-BLOCK-START and after EVOLVE-BLOCK-END
+            # are unchanged, those tags are present, and there are changes between them.
+            # otherwise, reject and send feedback to the agent.
             Path(exec_fname).write_text(program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)

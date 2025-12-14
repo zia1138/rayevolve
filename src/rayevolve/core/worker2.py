@@ -41,6 +41,8 @@ from pydantic_ai import Agent, ModelMessage, RunContext, RunUsage, UsageLimits
 import logfire
 from enum import Enum
 
+from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,6 +86,25 @@ class ImprovedProgram(BaseModel):
     """Use this when you have successfully improved the parent program in one of your experiments."""
     improved_code: str = Field(description="The improved program code.")
     score: float = Field(description="The score of the improved program.")
+
+class DriftContext(BaseModel):
+    parent_code: str = Field(description="Code of the parent program being modified.")
+
+class NovelProgram(BaseModel):
+    """Use this when you have discovered a novel and correct program."""
+    novel_code: str = Field(description="Novel and correct program code.")
+
+class VerifiedChangeAndNovel(BaseModel):
+    """Use this when you can verify the change type and the program is novel."""
+    reasoning: str = Field(description="Explanation of the verification and novelty.")
+
+class ChangeNotVerified(BaseModel):
+    """Use this when the change type could not be verified."""
+    reasoning: str = Field(description="Explanation of why the change type could not be verified.")
+
+class NotNovel(BaseModel):
+    """Use this when the program is not substantially different from the parent."""
+    reasoning: str = Field(description="Explanation of why the program is not novel.")
 
 
 @ray.remote
@@ -154,11 +175,16 @@ class EvoWorker:
         logfire.instrument_pydantic_ai()
 
     def run(self):
-                 
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            #await self.run_strategy(current_gen)
-            self.agent_climb(current_gen)
+            # self.run_strategy(current_gen)
+            if random.random() < 1.0:
+                self.agent_driftaway(current_gen)
+            else:
+                self.agent_climb(current_gen)
 
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
@@ -225,18 +251,18 @@ class EvoWorker:
 
         return strategy_funcs[chosen_name](current_gen)
 
-    def agent_climb(self, current_gen: int):
-
+    def agent_climb_or_drift(self, current_gen: int, drift_up: bool = False):
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        elite_parent = ray.get(self.db.sample_archive_program.remote())
-        if not elite_parent:
-            return
-                
+        if drift_up:
+            elite_parent = ray.get(self.db.sample_all_programs.remote())
+        else:        
+            elite_parent = ray.get(self.db.sample_archive_program.remote())
+
         coder_template = textwrap.dedent("""
-            You are an Expert Optimization Engineer refining an elite solution.
+            You are an expert computer scientist improving a solution.
             
             ### MISSION
             The code below has achieved a score of **{score}**. Your goal is to beat this score.
@@ -249,6 +275,7 @@ class EvoWorker:
             ### PROTOCOL
             You must follow the **Scientific Method**:
             1. **Analyze:** Use the code for inspiration and come up with an approach to improve the score.
+               It can be completely novel or a modification of the existing code.                     
             2. **Experiment:** Write the code to implement your idea.
             3. **Evaluate:** Use `run_experiment` to get the score.
             4. **Log:** Use `log_experiment` to record the outcome of your idea and analyze *why* 
@@ -258,12 +285,12 @@ class EvoWorker:
             - **Persistence:** Do not give up. Use the feedback to improve your code.
             - **Efficiency:** You have a maximum of 5 attempts.
             - You must `run_experiment` before `log_experiment` for each hypothesis.                             
-                                         
-            - **Safety:** Keep the markers "EVOLVE-BLOCK-START" and "EVOLVE-BLOCK-END" in the code. Do not change the code outside of these markers.
- 
+            - **Safety:** You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
+              and above a line containing "EVOLVE-BLOCK-END". Everything outside those markers is read-only 
+              and must be kept as-is.                                         
+
             ### COMPLETION
-            - If you achieve `new_score > {score}`, keep trying to improve the score for up to
-              5 hypotheses total, then return `ImprovedProgram` with your best code and score.                                                                      
+            - If you achieve `new_score > {score}`. Stop and return `ImprovedProgram` with your best code and score.                                                                      
             - If you cannot beat the score after 5 distinct hypotheses, return `GiveUp`.
          """)
 
@@ -271,12 +298,15 @@ class EvoWorker:
                                              code=elite_parent.code, 
                                              score=elite_parent.combined_score)
 
+        model = GoogleModel('gemini-2.5-flash')
+        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
         evo_coder = Agent[ClimbContext, ImprovedProgram | GiveUp](
-            "google-gla:gemini-2.5-flash",
+            model,
             system_prompt=self.evo_config.task_sys_msg,
             deps_type=ClimbContext,
-            output_type= ImprovedProgram | GiveUp)
+            output_type= ImprovedProgram | GiveUp,
+            model_settings=settings)
 
         @evo_coder.tool
         def run_experiment(ctx: RunContext[ClimbContext], program: str) -> str:
@@ -309,10 +339,6 @@ class EvoWorker:
             out_str += "```"
             out_str += results["stdout_log"] + "\n"
             out_str += "```\n"
-            out_str += "Here is the standard error output of the program:\n"
-            out_str += "```"
-            out_str += results["stderr_log"] + "\n"
-            out_str += "```\n"
             return out_str
 
         @evo_coder.tool
@@ -329,32 +355,200 @@ class EvoWorker:
 
         #debugpy.listen(5678)
         #debugpy.wait_for_client()
-        #debugpy.breakpoint()                 
-        agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_score=elite_parent.combined_score))
-        
-        if isinstance(agent_result.output, ImprovedProgram):
-            # Add the program to the database
-            db_program = Program(
-                id=str(uuid.uuid4()),
-                code=agent_result.output.improved_code,
-                language=self.evo_config.language,
-                parent_id=elite_parent.id,
-                generation=current_gen,
-                code_diff="agent_climb",
-                embedding=[],
-                correct=True,
-                combined_score=agent_result.output.score,
-            )
-            ray.get(self.db.add.remote(db_program))
+        #debugpy.breakpoint()        
+        try:
+            agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_score=elite_parent.combined_score))
+            
+            if isinstance(agent_result.output, ImprovedProgram):
+                Path(exec_fname).write_text(agent_result.output.improved_code, "utf-8")
+                start_time = time.time()
+                job_id = self.scheduler.submit_async(exec_fname, results_dir)
+                results = self.scheduler.get_job_results(job_id, results_dir)
+                rtime = time.time() - start_time
+                if results.get("correct"): 
+                    combined = results.get("metrics", {}).get("combined_score")
+                    if combined is not None:
+                        # Add the program to the database
+                        db_program = Program(
+                            id=str(uuid.uuid4()),
+                            code=agent_result.output.improved_code,
+                            language=self.evo_config.language,
+                            parent_id=elite_parent.id,
+                            generation=current_gen,
+                            code_diff="agent_climb",
+                            embedding=[],
+                            correct=True,
+                            combined_score=agent_result.output.score,
+                        )
+                        ray.get(self.db.add.remote(db_program))
+                    else:
+                        print("Improved program did not return a score upon re-evaluation.")
+                else:
+                    print("Improved program was not correct upon re-evaluation.")
+        except Exception as e:
+            print(f"Agent encountered an error: {e}")
 
-
-    def agent_driftup(self, current_gen: int):
-        pass
+    def agent_climb(self, current_gen: int):
+        return self.agent_climb_or_drift(current_gen, drift_up=False)
     
-    def agent_driftaway(self, current_gen: int):
+    def agent_driftup(self, current_gen: int):
+        return self.agent_climb_or_drift(current_gen, drift_up=True)
+    
+    def agent_driftaway(self, current_gen: int):             
+        exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
+        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+
+        elite_parent = ray.get(self.db.sample_all_programs.remote())
+
+        coder_template = textwrap.dedent("""
+            You are an expert computer scientist finding novel solutions.
+            
+            ### MISSION
+            The code is below. Your goal is to produce a different solution that still works correctly.   
+            You can make many different types of substantive changes including algorithmic, changes to
+            modularization, data flow, control flow, or architectural patterns, or changes in parameters
+            and parameterization.                                                                  
+           
+            ### CODE
+            ```{lang}                             
+            {code}
+            ```
+                                         
+            ### PROTOCOL
+            You must propose a different solution and determine it is correct. You can submit 
+            your solution to `check_correctness` with the change type you made and get feedback.
+             
+            ### CONSTRAINTS
+            - **Persistence:** Do not give up. Use the feedback to help you identify a novel approach.
+            - **Efficiency:** You have a maximum of 5 attempts.
+            - **Safety:** You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
+              and above a line containing "EVOLVE-BLOCK-END". Everything outside those markers is read-only 
+              and must be kept as-is.
+                                         
+            ### COMPLETION
+            - If you succeed in finding a correct and novel program return `NovelProgram` with your code.
+            - If you cannot find a correct and novel program after 5 attempts, return `GiveUp`.
+         """)
+
+        coder_prompt = coder_template.format(lang=self.evo_config.language, 
+                                             code=elite_parent.code)
+
+        model = GoogleModel('gemini-2.5-flash')
+        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+
+        evo_coder = Agent[DriftContext, NovelProgram | GiveUp](
+            model,
+            system_prompt=self.evo_config.task_sys_msg,
+            deps_type=DriftContext,
+            output_type=NovelProgram | GiveUp,
+            model_settings=settings)
+
+        evo_diff = Agent(model, output_type=VerifiedChangeAndNovel | NotNovel | ChangeNotVerified,
+                         model_settings=settings)
+
+        def confirm_change(parent_code: str, novel_code: str, change_type: str) -> str:
+            diff_template = textwrap.dedent("""
+            Given the the following parent program and new program
+            Parent program:                                                                
+            ```{lang}
+            {parent_code}
+            ```
+            New program:                                
+            ```{lang}
+            {proposed_program}
+            ```
+            1. Verify that the the following change type was made:
+            {change_type} 
+            2. Does this change result in a program that has substantial changes including algorithmic, changes to
+               modularization, data flow, control flow, or architectural patterns, or changes in parameters and parameterization.   
+               from the parent program?
+            Return `VerifiedChangeAndNovel` if the change type could be verified and the program is substantially different.
+            Return `ChangeNotVerified` if the change type could not be verified.
+            Return `NotNovel` if the program is not substantially different from the parent.                                            
+            """)
+            diff_prompt = diff_template.format(parent_code=parent_code,
+                                              proposed_program=novel_code,
+                                              change_type=change_type,
+                                              lang=self.evo_config.language)
+            r = evo_diff.run(diff_prompt)
+            return r.output             
+
+        @evo_coder.tool
+        def check_correctness(ctx: RunContext[DriftContext], program: str, change_type:str) -> str:
+            """Call this tool with a novel program that you want to check for correctness and a description
+            of the change type you made. It will return the results of executing the program including its correctness 
+            It will check that the change type you provided was applied and if the program is substantially different from the parent.
+            """
+            debugpy.listen(5678)
+            debugpy.wait_for_client()
+            debugpy.breakpoint()   
+            Path(exec_fname).write_text(program, "utf-8")
+            start_time = time.time()
+            job_id = self.scheduler.submit_async(exec_fname, results_dir)
+            results = self.scheduler.get_job_results(job_id, results_dir)
+            rtime = time.time() - start_time
+             
+            out_str = ""
+            if results.get("correct"):
+                combined = results.get("metrics", {}).get("combined_score")
+                if combined is not None:
+                    out_str += f"The program executed correctly.\n"
+                    confirmation = confirm_change(ctx.deps.parent_code, program, change_type)
+                    if isinstance(confirmation, VerifiedChangeAndNovel):
+                        out_str += "The change type was verified and the program is substantially different from the parent.\n"
+                    elif isinstance(confirmation, ChangeNotVerified):
+                        out_str += "The change type could not be verified.\n"
+                    elif isinstance(confirmation, NotNovel):
+                        out_str += "The program is not substantially different from the parent.\n"
+                else:
+                    out_str += "The program did not execute correctly.\n"
+            else:
+                out_str += "The program did not execute correctly and did not produce a valid result.\n"
+        
+            out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
+            out_str += "Here is the standard output of the program:\n"
+            out_str += "```"
+            out_str += results["stdout_log"] + "\n"
+            out_str += "```\n"
+            return out_str
+
+        try:
+            agent_result = evo_coder.run_sync(coder_prompt, deps=DriftContext(parent_code=elite_parent.code))
+            
+            if isinstance(agent_result.output, ImprovedProgram):
+                Path(exec_fname).write_text(agent_result.output.improved_code, "utf-8")
+                job_id = self.scheduler.submit_async(exec_fname, results_dir)
+                results = self.scheduler.get_job_results(job_id, results_dir)
+                if results.get("correct"): 
+                    combined = results.get("metrics", {}).get("combined_score")
+                    if combined is not None:
+                        # Add the program to the database
+                        db_program = Program(
+                            id=str(uuid.uuid4()),
+                            code=agent_result.output.improved_code,
+                            language=self.evo_config.language,
+                            parent_id=elite_parent.id,
+                            generation=current_gen,
+                            code_diff="agent_climb",
+                            embedding=[],
+                            correct=True,
+                            combined_score=agent_result.output.score,
+                        )
+                        ray.get(self.db.add.remote(db_program))
+                    else:
+                        print("Program did not return a score upon re-evaluation.")
+                else:
+                    print("Program was not correct upon re-evaluation.")
+        except Exception as e:
+            print(f"Agent encountered an error: {e}")
+
+
         pass
 
     def agent_jump(self, current_gen: int):
+        
+
         pass
 
 

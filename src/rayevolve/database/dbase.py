@@ -852,6 +852,7 @@ class ProgramDatabase:
 
     @db_retry()
     def sample_archive_program(self) -> Optional[Program]:
+        """Sample a program from the archive using power-law distribution."""
         if not self.cursor:
             raise ConnectionError("DB not connected.")
         
@@ -879,8 +880,31 @@ class ProgramDatabase:
             sampled_idx = sample_with_powerlaw(archived_programs, alpha)
             selected_prog = archived_programs[sampled_idx]
             pid = selected_prog.id
-
+        # TODO: This get call is redundant, we already have the program.
         return self.get(pid)
+
+    def sample_all_programs(self) -> Optional[Program]:
+        """Sample from all correct programs using power-law distribution."""
+        if not self.cursor:
+            raise ConnectionError("DB not connected.")
+
+        self.cursor.execute(
+            """SELECT p.id FROM programs p
+                WHERE p.correct = 1
+                ORDER BY p.combined_score DESC"""
+        )
+        correct_rows = self.cursor.fetchall()
+        correct_program_ids = [row["id"] for row in correct_rows]
+        correct_programs = []
+        for prog_id in correct_program_ids:
+            prog = self.get(prog_id)
+            if prog:
+                correct_programs.append(prog)
+
+        alpha = getattr(self.config, "exploitation_alpha", 1.0)
+        sampled_idx = sample_with_powerlaw(correct_programs, alpha)
+        selected_prog = correct_programs[sampled_idx]
+        return selected_prog
 
     @db_retry()
     def sample(

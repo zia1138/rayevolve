@@ -1,3 +1,4 @@
+from __future__ import annotations
 import random
 from sys import stdout
 import uuid
@@ -73,6 +74,7 @@ class ExperimentEntry(BaseModel):
     outcome: str = Field(description="Outcome or observation from running the experiment.")
 
 class ClimbContext(BaseModel):
+    parent_code: str = Field(description="Code of the parent program being improved.")
     parent_score: float = Field(description="Score of the parent program being improved.")
     experiment_log: List["ExperimentEntry"] = Field(
         default_factory=list,
@@ -105,6 +107,291 @@ class ChangeNotVerified(BaseModel):
 class NotNovel(BaseModel):
     """Use this when the program is not substantially different from the parent."""
     reasoning: str = Field(description="Explanation of why the program is not novel.")
+
+
+
+#from __future__ import annotations
+
+import difflib
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+
+
+class EvolveErrorType(str, Enum):
+    TAGS_NOT_PRESENT = "tags_not_present"
+    MULTIPLE_START_TAGS = "multiple_start_tags"
+    MULTIPLE_END_TAGS = "multiple_end_tags"
+    START_AFTER_END = "start_after_end"
+
+    CHANGED_ABOVE = "changed_above"
+    CHANGED_BELOW = "changed_below"
+    NOT_CHANGED_BETWEEN = "not_changed_between"
+
+
+@dataclass(frozen=True)
+class TagPositions:
+    start_idx: Optional[int] = None  # 0-based line index
+    end_idx: Optional[int] = None    # 0-based line index
+
+
+@dataclass(frozen=True)
+class EvolveVerificationResult:
+    ok: bool
+    errors: tuple[tuple[EvolveErrorType, str], ...]
+    original_tags: TagPositions
+    updated_tags: TagPositions
+    above_changed: Optional[bool] = None
+    between_changed: Optional[bool] = None
+    below_changed: Optional[bool] = None
+
+
+def verify_evolve_block(
+    original_text: str,
+    updated_text: str,
+    start_tag: str = "EVOLVE-BLOCK-START",
+    end_tag: str = "EVOLVE-BLOCK-END",
+    *,
+    require_tags_on_own_line: bool = False,
+) -> EvolveVerificationResult:
+    def split_lines(s: str) -> list[str]:
+        return s.splitlines()
+
+    def find_tag_lines(lines: list[str], tag: str) -> list[int]:
+        if require_tags_on_own_line:
+            return [i for i, ln in enumerate(lines) if ln.strip() == tag]
+        return [i for i, ln in enumerate(lines) if tag in ln]
+
+    def get_positions(lines: list[str]) -> TagPositions:
+        starts = find_tag_lines(lines, start_tag)
+        ends = find_tag_lines(lines, end_tag)
+        return TagPositions(
+            start_idx=starts[0] if starts else None,
+            end_idx=ends[0] if ends else None,
+        )
+
+    orig_lines = split_lines(original_text)
+    upd_lines = split_lines(updated_text)
+
+    o_starts = find_tag_lines(orig_lines, start_tag)
+    o_ends = find_tag_lines(orig_lines, end_tag)
+    u_starts = find_tag_lines(upd_lines, start_tag)
+    u_ends = find_tag_lines(upd_lines, end_tag)
+
+    errors: list[tuple[EvolveErrorType, str]] = []
+
+    def validate(which: str, starts: list[int], ends: list[int]) -> None:
+        if not starts or not ends:
+            errors.append((EvolveErrorType.TAGS_NOT_PRESENT, f"{which}: missing start and/or end tag"))
+            return
+        if len(starts) > 1:
+            errors.append((EvolveErrorType.MULTIPLE_START_TAGS, f"{which}: found {len(starts)} start tags"))
+        if len(ends) > 1:
+            errors.append((EvolveErrorType.MULTIPLE_END_TAGS, f"{which}: found {len(ends)} end tags"))
+        if len(starts) == 1 and len(ends) == 1 and starts[0] > ends[0]:
+            errors.append((EvolveErrorType.START_AFTER_END, f"{which}: start tag occurs after end tag"))
+
+    validate("original", o_starts, o_ends)
+    validate("updated", u_starts, u_ends)
+
+    original_tags = get_positions(orig_lines)
+    updated_tags = get_positions(upd_lines)
+
+    fatal = {
+        EvolveErrorType.TAGS_NOT_PRESENT,
+        EvolveErrorType.MULTIPLE_START_TAGS,
+        EvolveErrorType.MULTIPLE_END_TAGS,
+        EvolveErrorType.START_AFTER_END,
+    }
+    if any(et in fatal for et, _ in errors):
+        return EvolveVerificationResult(
+            ok=False,
+            errors=tuple(errors),
+            original_tags=original_tags,
+            updated_tags=updated_tags,
+            above_changed=None,
+            between_changed=None,
+            below_changed=None,
+        )
+
+    # Single, ordered tags in both documents
+    o_start, o_end = o_starts[0], o_ends[0]
+    u_start, u_end = u_starts[0], u_ends[0]
+
+    o_above = orig_lines[:o_start]
+    o_between = orig_lines[o_start + 1 : o_end]
+    o_below = orig_lines[o_end + 1 :]
+
+    u_above = upd_lines[:u_start]
+    u_between = upd_lines[u_start + 1 : u_end]
+    u_below = upd_lines[u_end + 1 :]
+
+    above_same = (o_above == u_above)
+    below_same = (o_below == u_below)
+    between_changed = (o_between != u_between)
+
+    if not above_same:
+        errors.append((EvolveErrorType.CHANGED_ABOVE, "Content changed above the start tag line"))
+    if not below_same:
+        errors.append((EvolveErrorType.CHANGED_BELOW, "Content changed below the end tag line"))
+    if not between_changed:
+        errors.append((EvolveErrorType.NOT_CHANGED_BETWEEN, "No changes detected between tag lines"))
+
+    return EvolveVerificationResult(
+        ok=(len(errors) == 0),
+        errors=tuple(errors),
+        original_tags=TagPositions(start_idx=o_start, end_idx=o_end),
+        updated_tags=TagPositions(start_idx=u_start, end_idx=u_end),
+        above_changed=(not above_same),
+        between_changed=between_changed,
+        below_changed=(not below_same),
+    )
+
+
+def llm_fix_instructions(
+    original_text: str,
+    updated_text: str,
+    result: EvolveVerificationResult,
+    *,
+    start_tag: str = "EVOLVE-BLOCK-START",
+    end_tag: str = "EVOLVE-BLOCK-END",
+    require_tags_on_own_line: bool = False,
+    max_diff_lines: int = 400,
+) -> str:
+    """
+    Returns plain instructions for an LLM on how to fix updated_text to satisfy rules.
+    IMPORTANT: This function ONLY shows diffs for *disallowed* changes (ABOVE/BELOW).
+               It never shows diffs of allowed BETWEEN edits.
+    """
+
+    def split_lines(s: str) -> list[str]:
+        return s.splitlines()
+
+    def unified(a_lines: list[str], b_lines: list[str], fromfile: str, tofile: str) -> str:
+        diff_iter = difflib.unified_diff(a_lines, b_lines, fromfile=fromfile, tofile=tofile, lineterm="")
+        diff_lines = list(diff_iter)
+        if not diff_lines:
+            return "(no diff)"
+        if len(diff_lines) > max_diff_lines:
+            head = diff_lines[: max_diff_lines // 2]
+            tail = diff_lines[-max_diff_lines // 2 :]
+            return "\n".join(head + ["... (diff truncated) ..."] + tail)
+        return "\n".join(diff_lines)
+
+    def has_error(t: EvolveErrorType) -> bool:
+        return any(code == t for code, _ in result.errors)
+
+    def fmt_line(idx0: Optional[int]) -> str:
+        return "N/A" if idx0 is None else str(idx0 + 1)
+
+    # If OK, minimal instruction.
+    if result.ok:
+        return (
+            "All constraints are satisfied.\n"
+            "- Tags are present.\n"
+            "- Content outside the tags is unchanged.\n"
+            "- Content between the tags has changed.\n"
+        )
+
+    orig_lines = split_lines(original_text)
+    upd_lines = split_lines(updated_text)
+
+    lines: list[str] = []
+    lines.append("Fix the updated code to satisfy these constraints:")
+    lines.append(f"- There must be exactly one '{start_tag}' line and exactly one '{end_tag}' line.")
+    lines.append("- Do not change any content above the start tag line.")
+    lines.append("- Do not change any content below the end tag line.")
+    lines.append("- Make at least one change strictly between the tag lines.")
+    lines.append("")
+    lines.append("Tag locations (1-based line numbers):")
+    lines.append(f"- original: start={fmt_line(result.original_tags.start_idx)}, end={fmt_line(result.original_tags.end_idx)}")
+    lines.append(f"- updated:  start={fmt_line(result.updated_tags.start_idx)}, end={fmt_line(result.updated_tags.end_idx)}")
+    lines.append("")
+
+    # Tag / structure errors: explicit corrective steps (no diffs; regions not reliable).
+    fatal = {
+        EvolveErrorType.TAGS_NOT_PRESENT,
+        EvolveErrorType.MULTIPLE_START_TAGS,
+        EvolveErrorType.MULTIPLE_END_TAGS,
+        EvolveErrorType.START_AFTER_END,
+    }
+    if any(code in fatal for code, _ in result.errors):
+        if has_error(EvolveErrorType.TAGS_NOT_PRESENT):
+            lines.append("ERROR: Tags are missing.")
+            lines.append("Fix:")
+            lines.append(f"- Add exactly one line containing '{start_tag}' and exactly one line containing '{end_tag}'.")
+            lines.append("- Place them so the editable block is between them.")
+            lines.append("- Keep everything outside the tags identical to the original.")
+            lines.append("")
+        if has_error(EvolveErrorType.MULTIPLE_START_TAGS):
+            lines.append("ERROR: Multiple start tags found.")
+            lines.append("Fix:")
+            lines.append(f"- Remove extra '{start_tag}' lines so only one remains.")
+            lines.append("")
+        if has_error(EvolveErrorType.MULTIPLE_END_TAGS):
+            lines.append("ERROR: Multiple end tags found.")
+            lines.append("Fix:")
+            lines.append(f"- Remove extra '{end_tag}' lines so only one remains.")
+            lines.append("")
+        if has_error(EvolveErrorType.START_AFTER_END):
+            lines.append("ERROR: Start tag occurs after end tag.")
+            lines.append("Fix:")
+            lines.append(f"- Reorder so '{start_tag}' appears before '{end_tag}'.")
+            lines.append("")
+        lines.append("After fixing tags, make edits ONLY between the tags.")
+        return "\n".join(lines)
+
+    # Safe to segment.
+    o_start = result.original_tags.start_idx
+    o_end = result.original_tags.end_idx
+    u_start = result.updated_tags.start_idx
+    u_end = result.updated_tags.end_idx
+    assert None not in (o_start, o_end, u_start, u_end)
+
+    o_above = orig_lines[:o_start]
+    u_above = upd_lines[:u_start]
+    o_between = orig_lines[o_start + 1 : o_end]
+    u_between = upd_lines[u_start + 1 : u_end]
+    o_below = orig_lines[o_end + 1 :]
+    u_below = upd_lines[u_end + 1 :]
+
+    if has_error(EvolveErrorType.CHANGED_ABOVE):
+        lines.append("ERROR: Disallowed changes detected ABOVE the start tag.")
+        lines.append("Fix:")
+        lines.append("- Revert the ABOVE region to exactly match the original.")
+        lines.append("Diff to undo (original -> updated) for ABOVE:")
+        lines.append("```diff")
+        lines.append(unified(o_above, u_above, "original:ABOVE", "updated:ABOVE"))
+        lines.append("```")
+        lines.append("")
+
+    if has_error(EvolveErrorType.CHANGED_BELOW):
+        lines.append("ERROR: Disallowed changes detected BELOW the end tag.")
+        lines.append("Fix:")
+        lines.append("- Revert the BELOW region to exactly match the original.")
+        lines.append("Diff to undo (original -> updated) for BELOW:")
+        lines.append("```diff")
+        lines.append(unified(o_below, u_below, "original:BELOW", "updated:BELOW"))
+        lines.append("```")
+        lines.append("")
+
+    if has_error(EvolveErrorType.NOT_CHANGED_BETWEEN):
+        lines.append("ERROR: No changes detected BETWEEN the tags (this region must change).")
+        lines.append("Fix:")
+        lines.append("- Make at least one edit strictly between the tag lines.")
+        lines.append("- Do not change the tag lines.")
+        lines.append("- Do not change anything above or below the tags.")
+        lines.append("")
+
+        # Optional: if BETWEEN is empty, suggest adding something.
+        if len(o_between) == 0 and len(u_between) == 0:
+            lines.append("Note: The region between the tags is currently empty; add content there.")
+            lines.append("")
+
+    lines.append("Stop when:")
+    lines.append("- ABOVE and BELOW match the original exactly,")
+    lines.append("- and BETWEEN differs from the original.")
+    return "\n".join(lines)
 
 
 @ray.remote
@@ -362,7 +649,7 @@ class EvoWorker:
         #debugpy.wait_for_client()
         #debugpy.breakpoint()        
         try:
-            agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_score=elite_parent.combined_score))
+            agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_code=elite_parent.code, parent_score=elite_parent.combined_score))
             
             if isinstance(agent_result.output, ImprovedProgram):
                 Path(exec_fname).write_text(agent_result.output.improved_code, "utf-8")
@@ -435,7 +722,6 @@ class EvoWorker:
               - Make sure your rewritten program maintains the same inputs and outputs as the original program, 
                 but with a novel internal implementation.
               - Make sure the file still runs after your changes.
-
                                                       
             ### COMPLETION
             - If you succeed in finding a correct and novel program return `NovelProgram` with your code.
@@ -491,12 +777,14 @@ class EvoWorker:
             of the change type you made. It will return the results of executing the program including its correctness. 
             It will check that the change type you provided was applied and if the program is substantially different from the parent.
             """
-            debugpy.listen(5678)
-            debugpy.wait_for_client()
-            debugpy.breakpoint()   
-            # TODO: Add some code to verify code before EVOLVE-BLOCK-START and after EVOLVE-BLOCK-END
-            # are unchanged, those tags are present, and there are changes between them.
-            # otherwise, reject and send feedback to the agent.
+            res = verify_evolve_block(ctx.deps.parent_code, program)
+            if not res.ok:
+                return llm_fix_instructions(ctx.deps.parent_code, program, res)
+            #debugpy.listen(5678)
+            #debugpy.wait_for_client()
+            #debugpy.breakpoint()   
+
+
             Path(exec_fname).write_text(program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
@@ -514,7 +802,7 @@ class EvoWorker:
                     elif isinstance(confirmation, ChangeNotVerified):
                         out_str += "The change type could not be verified.\n"
                     elif isinstance(confirmation, NotNovel):
-                        out_str += "The program is not substantially different from the parent.\n"
+                        out_str += "Change type was verified, but the program is not substantially different from the parent.\n"
                 else:
                     out_str += "The program did not execute correctly.\n"
             else:

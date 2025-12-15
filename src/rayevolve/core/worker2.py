@@ -85,7 +85,10 @@ class GiveUp(BaseModel):
     """Use this when you are unable to improve the parent program."""
 
 class ImprovedProgram(BaseModel):
-    """Use this when you have successfully improved the parent program in one of your experiments."""
+    """Use this when you have successfully improved the parent program in one of your experiments.
+       Your improved program must include any unchanged code above "EVOLVE-BLOCK-START" and below the 
+       line containing "EVOLVE-BLOCK-END". 
+    """
     improved_code: str = Field(description="The improved program code.")
     score: float = Field(description="The score of the improved program.")
 
@@ -93,7 +96,10 @@ class DriftContext(BaseModel):
     parent_code: str = Field(description="Code of the parent program being modified.")
 
 class NovelProgram(BaseModel):
-    """Use this when you have discovered a novel and correct program."""
+    """Use this when you have discovered a novel and correct program.
+       Your novel program must include any unchanged code above "EVOLVE-BLOCK-START" and below the 
+       line containing "EVOLVE-BLOCK-END". 
+    """
     novel_code: str = Field(description="Novel and correct program code.")
 
 class VerifiedChangeAndNovel(BaseModel):
@@ -399,27 +405,36 @@ from typing import Optional
 _FENCE_RE = re.compile(r"^\s*```[^\n]*\n", re.IGNORECASE)
 _FENCE_END_RE = re.compile(r"\n\s*```\s*$", re.IGNORECASE)
 
+def strip_outer_blank_lines(text: str) -> str:
+    """
+    Remove ALL leading and trailing blank lines (including whitespace-only lines).
+    Does not touch internal blank lines.
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+
+    end = len(lines)
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+
+    return "\n".join(lines[start:end])
+
+
 def unwrap_markdown_code_fences(text: str) -> str:
     """
-    If `text` is wrapped in a single outer Markdown code block, remove the fences.
-    Example:
-      ```python
-      ...
-      ```
-    -> returns inner content.
-
-    If there are multiple fenced blocks, this will return the *largest* fenced block
-    (common when an LLM includes commentary + code).
+    If the content is wrapped in a single outer Markdown fence, remove it.
+    If multiple fenced blocks exist, return the largest fenced block.
     """
-    # Fast path: whole string is one fenced block
+    # Fast path: entire content is a single fenced block
     if _FENCE_RE.search(text) and _FENCE_END_RE.search(text):
-        # Remove first fence line
         text2 = _FENCE_RE.sub("", text, count=1)
-        # Remove final fence
         text2 = _FENCE_END_RE.sub("", text2, count=1)
         return text2
 
-    # Otherwise: extract fenced blocks and pick the largest one
+    # Otherwise, extract fenced blocks and return the largest
     blocks = []
     for m in re.finditer(r"```[^\n]*\n([\s\S]*?)\n```", text):
         blocks.append(m.group(1))
@@ -428,19 +443,46 @@ def unwrap_markdown_code_fences(text: str) -> str:
 
     return text
 
+
 def normalize_llm_program(text: str) -> str:
     """
-    Recommended normalization before verification.
-    - unwrap outer fences
-    - remove leading/trailing blank lines introduced by formatting
-    - normalize line endings
+    Normalization order:
+      1) Normalize line endings
+      2) Remove leading/trailing blank lines
+      3) Remove outer Markdown code fences
+      4) Remove leading/trailing blank lines again (fences often introduce them)
+
+    Result is stable for diffing.
     """
-    t = unwrap_markdown_code_fences(text)
-    t = t.replace("\r\n", "\n").replace("\r", "\n")
-    # Trim only blank lines at the edges (not internal whitespace)
-    t = re.sub(r"^\s*\n+", "", t)
-    t = re.sub(r"\n+\s*$", "\n", t)  # keep a single trailing newline (optional)
+    # 1) Normalize line endings
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # 2) Strip blank lines first (prevents fake ABOVE/BELOW diffs)
+    t = strip_outer_blank_lines(t)
+
+    # 3) Remove Markdown fences
+    t = unwrap_markdown_code_fences(t)
+
+    # 4) Strip blank lines again (post-fence cleanup)
+    t = strip_outer_blank_lines(t)
+
     return t
+
+
+def clear_results_dir(results_dir: str) -> None:
+    """
+    Remove all files inside results_dir, keeping the folder itself.
+    Safe to call if the directory does not exist.
+    """
+    p = Path(results_dir)
+    if not p.exists():
+        return
+    for child in p.iterdir():
+        try:
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+        except Exception as e:
+            logger.warning(f"Failed to delete {child}: {e}")
 
 @ray.remote
 class EvoGen:
@@ -515,11 +557,15 @@ class EvoWorker:
         #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
+            self.agent_climb(current_gen)
             # self.run_strategy(current_gen)
-            if random.random() < 1.0:
-                self.agent_driftaway(current_gen)
-            else:
-                self.agent_climb(current_gen)
+            #if random.random() < 0.5:
+            #    self.agent_driftaway(current_gen)
+            #else:
+            #    if random.random() < 0.5:
+            #        self.agent_climb(current_gen)
+            #    else:
+            #        self.agent_climb_or_drift(current_gen, drift_up=True)
 
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
@@ -592,6 +638,7 @@ class EvoWorker:
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
         if drift_up:
+            # Sample from non-elite programs for drift up.
             elite_parent = ray.get(self.db.sample_all_programs.remote())
         else:        
             elite_parent = ray.get(self.db.sample_archive_program.remote())
@@ -613,8 +660,6 @@ class EvoWorker:
                It can be completely novel or a modification of the existing code.                     
             2. **Experiment:** Write the code to implement your idea.
             3. **Evaluate:** Use `run_experiment` to get the score.
-            4. **Log:** Use `log_experiment` to record the outcome of your idea and analyze *why* 
-               the score improved or got worse to inform your next attempt.
              
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to improve your code.
@@ -630,7 +675,8 @@ class EvoWorker:
               - Make sure the file still runs after your changes.                        
 
             ### COMPLETION
-            - If you achieve `new_score > {score}`. Stop and return `ImprovedProgram` with your best code and score.                                                                      
+            - If you achieve `new_score > {score}`. Stop and return `ImprovedProgram` with your best code and score. 
+              Keep all unchanged code before and after the evolve block intact.
             - If you cannot beat the score after 5 distinct hypotheses, return `GiveUp`.
          """)
 
@@ -664,7 +710,8 @@ class EvoWorker:
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
-             
+
+
             out_str = ""
             if results.get("correct"):
                 out_str += "The program executed correctly and produced a valid result.\n"
@@ -685,25 +732,17 @@ class EvoWorker:
             out_str += "```"
             out_str += results["stdout_log"] + "\n"
             out_str += "```\n"
-            return out_str
 
-        @evo_coder.tool
-        def log_experiment(ctx: RunContext[ClimbContext], idea: str, outcome: str) -> str:
-            """Call this tool after each experiment to log your idea and its outcome.
-            This will help you keep track of what you've tried and what worked or didn't work."""
-            ctx.deps.experiment_log.append(ExperimentEntry(idea=idea, outcome=outcome))
-            log_str = "Experiments conducted so far:\n\n"
-            for idx, entry in enumerate(ctx.deps.experiment_log):
-                log_str += f"Experiment {idx+1}:\n"
-                log_str += f"Idea: {entry.idea}\n"
-                log_str += f"Outcome: {entry.outcome}\n\n"
-            return log_str
+            # NOTE: This is an issue for any concurrency in this agent.
+            clear_results_dir(results_dir)
+            return out_str
 
         #debugpy.listen(5678)
         #debugpy.wait_for_client()
         #debugpy.breakpoint()        
         try:
-            agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_code=elite_parent.code, parent_score=elite_parent.combined_score))
+            agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_code=normalize_llm_program(elite_parent.code), 
+                                                                              parent_score=elite_parent.combined_score))
             
             if isinstance(agent_result.output, ImprovedProgram):
                 Path(exec_fname).write_text(agent_result.output.improved_code, "utf-8")
@@ -869,10 +908,13 @@ class EvoWorker:
             out_str += "```"
             out_str += results["stdout_log"] + "\n"
             out_str += "```\n"
+
+            # NOTE: This is an issue for any concurrency in this agent.
+            clear_results_dir(results_dir)            
             return out_str
 
         try:
-            agent_result = evo_coder.run_sync(coder_prompt, deps=DriftContext(parent_code=elite_parent.code))
+            agent_result = evo_coder.run_sync(coder_prompt, deps=DriftContext(parent_code=normalize_llm_program(elite_parent.code)))
             
             if isinstance(agent_result.output, NovelProgram):
                 Path(exec_fname).write_text(agent_result.output.novel_code, "utf-8")
@@ -901,12 +943,7 @@ class EvoWorker:
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 
-
-        pass
-
     def agent_jump(self, current_gen: int):
-        
-
         pass
 
 

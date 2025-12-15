@@ -393,6 +393,54 @@ def llm_fix_instructions(
     lines.append("- and BETWEEN differs from the original.")
     return "\n".join(lines)
 
+import re
+from typing import Optional
+
+_FENCE_RE = re.compile(r"^\s*```[^\n]*\n", re.IGNORECASE)
+_FENCE_END_RE = re.compile(r"\n\s*```\s*$", re.IGNORECASE)
+
+def unwrap_markdown_code_fences(text: str) -> str:
+    """
+    If `text` is wrapped in a single outer Markdown code block, remove the fences.
+    Example:
+      ```python
+      ...
+      ```
+    -> returns inner content.
+
+    If there are multiple fenced blocks, this will return the *largest* fenced block
+    (common when an LLM includes commentary + code).
+    """
+    # Fast path: whole string is one fenced block
+    if _FENCE_RE.search(text) and _FENCE_END_RE.search(text):
+        # Remove first fence line
+        text2 = _FENCE_RE.sub("", text, count=1)
+        # Remove final fence
+        text2 = _FENCE_END_RE.sub("", text2, count=1)
+        return text2
+
+    # Otherwise: extract fenced blocks and pick the largest one
+    blocks = []
+    for m in re.finditer(r"```[^\n]*\n([\s\S]*?)\n```", text):
+        blocks.append(m.group(1))
+    if blocks:
+        return max(blocks, key=len)
+
+    return text
+
+def normalize_llm_program(text: str) -> str:
+    """
+    Recommended normalization before verification.
+    - unwrap outer fences
+    - remove leading/trailing blank lines introduced by formatting
+    - normalize line endings
+    """
+    t = unwrap_markdown_code_fences(text)
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    # Trim only blank lines at the edges (not internal whitespace)
+    t = re.sub(r"^\s*\n+", "", t)
+    t = re.sub(r"\n+\s*$", "\n", t)  # keep a single trailing newline (optional)
+    return t
 
 @ray.remote
 class EvoGen:
@@ -605,6 +653,12 @@ class EvoWorker:
             """Call this tool with a novel program that you want to evaluate. It will return
             the results of executing the program including its score and correctness.
             """
+
+            program = normalize_llm_program(program)
+            res = verify_evolve_block(ctx.deps.parent_code, program)
+            if not res.ok:
+                return llm_fix_instructions(ctx.deps.parent_code, program, res)
+            
             Path(exec_fname).write_text(program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
@@ -670,7 +724,7 @@ class EvoWorker:
                             code_diff="agent_climb",
                             embedding=[],
                             correct=True,
-                            combined_score=agent_result.output.score,
+                            combined_score=combined,
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:
@@ -777,6 +831,8 @@ class EvoWorker:
             of the change type you made. It will return the results of executing the program including its correctness. 
             It will check that the change type you provided was applied and if the program is substantially different from the parent.
             """
+
+            program = normalize_llm_program(program)
             res = verify_evolve_block(ctx.deps.parent_code, program)
             if not res.ok:
                 return llm_fix_instructions(ctx.deps.parent_code, program, res)
@@ -818,8 +874,8 @@ class EvoWorker:
         try:
             agent_result = evo_coder.run_sync(coder_prompt, deps=DriftContext(parent_code=elite_parent.code))
             
-            if isinstance(agent_result.output, ImprovedProgram):
-                Path(exec_fname).write_text(agent_result.output.improved_code, "utf-8")
+            if isinstance(agent_result.output, NovelProgram):
+                Path(exec_fname).write_text(agent_result.output.novel_code, "utf-8")
                 job_id = self.scheduler.submit_async(exec_fname, results_dir)
                 results = self.scheduler.get_job_results(job_id, results_dir)
                 if results.get("correct"): 
@@ -828,14 +884,14 @@ class EvoWorker:
                         # Add the program to the database
                         db_program = Program(
                             id=str(uuid.uuid4()),
-                            code=agent_result.output.improved_code,
+                            code=agent_result.output.novel_code,
                             language=self.evo_config.language,
                             parent_id=elite_parent.id,
                             generation=current_gen,
                             code_diff="agent_climb",
                             embedding=[],
                             correct=True,
-                            combined_score=agent_result.output.score,
+                            combined_score=combined,
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:

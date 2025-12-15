@@ -744,7 +744,7 @@ class EvoWorker:
         evo_diff = Agent(model, output_type=VerifiedChangeAndNovel | NotNovel | ChangeNotVerified,
                          model_settings=settings)
 
-        def confirm_change(parent_code: str, novel_code: str, change_type: str) -> str:
+        async def confirm_change(parent_code: str, novel_code: str, change_type: str) -> str:
             diff_template = textwrap.dedent("""
             Given the the following parent program and new program
             Parent program:                                                                
@@ -768,11 +768,11 @@ class EvoWorker:
                                               proposed_program=novel_code,
                                               change_type=change_type,
                                               lang=self.evo_config.language)
-            r = evo_diff.run_sync(diff_prompt)
+            r = await evo_diff.run(diff_prompt)
             return r.output             
 
         @evo_coder.tool
-        def check_correctness(ctx: RunContext[DriftContext], program: str, change_type:str) -> str:
+        async def check_correctness(ctx: RunContext[DriftContext], program: str, change_type:str) -> str:
             """Call this tool with a novel program that you want to check for correctness and a description
             of the change type you made. It will return the results of executing the program including its correctness. 
             It will check that the change type you provided was applied and if the program is substantially different from the parent.
@@ -796,7 +796,7 @@ class EvoWorker:
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
-                    confirmation = confirm_change(ctx.deps.parent_code, program, change_type)
+                    confirmation = await confirm_change(ctx.deps.parent_code, program, change_type)
                     if isinstance(confirmation, VerifiedChangeAndNovel):
                         out_str += "The change type was verified and the program is substantially different from the parent.\n"
                     elif isinstance(confirmation, ChangeNotVerified):

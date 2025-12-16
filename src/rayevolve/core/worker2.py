@@ -248,15 +248,15 @@ class EvoWorker:
         #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            self.agent_driftaway(current_gen)
+            # self.agent_driftaway(current_gen)
             # self.run_strategy(current_gen)
-            #if random.random() < 0.5:
-            #    self.agent_driftaway(current_gen)
-            #else:
-            #    if random.random() < 0.5:
-            #        self.agent_climb(current_gen)
-            #    else:
-            #        self.agent_climb_or_drift(current_gen, drift_up=True)
+            if random.random() < 0.5:
+                self.agent_driftaway(current_gen)
+            else:
+                if random.random() < 0.5:
+                    self.agent_climb(current_gen)
+                else:
+                    self.agent_climb_or_drift(current_gen, drift_up=True)
 
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
@@ -332,9 +332,9 @@ class EvoWorker:
 
         if drift_up:
             # Sample from non-elite programs for drift up.
-            parent = ray.get(self.db.sample_all_programs.remote())
+            parent = ray.get(self.db.sample_all_programs.remote(10))
         else:        
-            parent = ray.get(self.db.sample_archive_program.remote())
+            parent = ray.get(self.db.sample_archive_program.remote(3))
 
         evolve_block = extract_evolve_block(parent.code)
 
@@ -476,7 +476,7 @@ class EvoWorker:
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        parent = ray.get(self.db.sample_all_programs.remote())
+        parent = ray.get(self.db.sample_all_programs.remote(3))
         evolve_block = extract_evolve_block(parent.code)
 
         coder_template = textwrap.dedent("""
@@ -502,7 +502,8 @@ class EvoWorker:
               but with a completely novel internal implementation.
                                                       
             ### COMPLETION
-            - If change type was verified and the program is substantially different from the parent, use the submit_novel tool to submit your novel program.
+            - As soon as the change type was verified and the program is substantially different from the parent, 
+              use the submit_novel tool to submit your novel program.
             - If you cannot find a correct and novel program after 5 attempts explain why and give up.
          """)
 

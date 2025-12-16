@@ -79,7 +79,6 @@ def sample_with_powerlaw(items: list, alpha: float = 1.0) -> int:
         probs = np.ones(len(items))
 
     probs = probs / probs.sum()  # Normalize
-    logger.info(f"Power law probs: {probs.tolist()}")
     return np.random.choice(len(items), p=probs)
 
 @dataclass
@@ -851,7 +850,7 @@ class ProgramDatabase:
         return self._program_from_row(row)
 
     @db_retry()
-    def sample_archive_program(self) -> Optional[Program]:
+    def sample_archive_program(self, alpha) -> Optional[Program]:
         """Sample a program from the archive using power-law distribution."""
         if not self.cursor:
             raise ConnectionError("DB not connected.")
@@ -876,14 +875,14 @@ class ProgramDatabase:
                 key=lambda p: p.combined_score or 0.0, reverse=True
             )
  
-            alpha = getattr(self.config, "exploitation_alpha", 1.0)
+            # alpha = getattr(self.config, "exploitation_alpha", 1.0)
             sampled_idx = sample_with_powerlaw(archived_programs, alpha)
             selected_prog = archived_programs[sampled_idx]
             pid = selected_prog.id
         # TODO: This get call is redundant, we already have the program.
         return self.get(pid)
 
-    def sample_all_programs(self) -> Optional[Program]:
+    def sample_all_programs(self, alpha) -> Optional[Program]:
         """Sample from all correct programs using power-law distribution."""
         if not self.cursor:
             raise ConnectionError("DB not connected.")
@@ -901,7 +900,7 @@ class ProgramDatabase:
             if prog:
                 correct_programs.append(prog)
 
-        alpha = getattr(self.config, "exploitation_alpha", 1.0)
+        # alpha = getattr(self.config, "exploitation_alpha", 1.0)
         sampled_idx = sample_with_powerlaw(correct_programs, alpha)
         selected_prog = correct_programs[sampled_idx]
         return selected_prog

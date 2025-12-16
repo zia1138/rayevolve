@@ -68,11 +68,11 @@ class StrategyProbs(BaseModel):
         return {k: v / total for k, v in weights.items()}
 
 class ClimbContext(BaseModel):
-    evolve_block: EvolveBlock = Field(description="Code of the parent program being improved.")
-    parent_score: float = Field(description="Score of the parent program being improved.")
-    
-class DriftContext(BaseModel):
-    parent_code: str = Field(description="Code of the parent program being modified.")
+    evolve_block: EvolveBlock
+    parent_score: float
+
+class DriftAwayContext(BaseModel):
+    evolve_block: EvolveBlock
 
 class VerifiedChangeAndNovel(BaseModel):
     """Use this when you can verify the change type and the program is novel."""
@@ -248,7 +248,7 @@ class EvoWorker:
         #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            self.agent_climb(current_gen)
+            self.agent_driftaway(current_gen)
             # self.run_strategy(current_gen)
             #if random.random() < 0.5:
             #    self.agent_driftaway(current_gen)
@@ -357,7 +357,9 @@ class EvoWorker:
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to improve your code.
             - **Efficiency:** You have a maximum of 5 attempts.
-        
+            - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
+              but with an improved internal implementation.
+            
             ### COMPLETION
             - As soon as you achieve a score greater than {score}, submit your improved program using `submit_tool`.
             - If you cannot beat the of the above code after 5 distinct hypotheses, give up and offer an explanation why.
@@ -474,11 +476,12 @@ class EvoWorker:
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        elite_parent = ray.get(self.db.sample_all_programs.remote())
+        parent = ray.get(self.db.sample_all_programs.remote())
+        evolve_block = extract_evolve_block(parent.code)
 
         coder_template = textwrap.dedent("""
             ### MISSION
-            The code is below. Your goal is to produce a different solution that still works correctly.   
+            The code is below. Your goal is to produce a dramatically different solution that still works correctly.   
             You should make many different types of substantive changes including algorithmic, changes to
             modularization, data flow, control flow, or architectural patterns, or changes in parameters
             and parameterization.                                                                  
@@ -495,14 +498,8 @@ class EvoWorker:
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to help you identify a novel approach.
             - **Efficiency:** You have a maximum of 5 attempts.
-            - **Safety:** 
-              - You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
-                and above a line containing "EVOLVE-BLOCK-END". 
-                You must NOT remove or modify any code outside these tags.
-                You must NOT remove the tags themselves.                         
-              - Make sure your rewritten program maintains the same inputs and outputs as the original program, 
-                but with a novel internal implementation.
-              - Make sure the file still runs after your changes.
+            - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
+              but with a completely novel internal implementation.
                                                       
             ### COMPLETION
             - If change type was verified and the program is substantially different from the parent, use the submit_novel tool to submit your novel program.
@@ -510,19 +507,16 @@ class EvoWorker:
          """)
 
         coder_prompt = coder_template.format(lang=self.evo_config.language, 
-                                             code=elite_parent.code)
+                                             code=evolve_block.inner_content)
 
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
-        def submit_novel(ctx: RunContext[ClimbContext], program: str) -> None:
+        def submit_novel(ctx: RunContext[DriftAwayContext], program: str) -> None:
             """Call this tool to submit your novel program."""
-            program = normalize_llm_program(program)
-            res = verify_evolve_block(ctx.deps.parent_code, program)
-            if not res.ok:
-                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
-            
-            Path(exec_fname).write_text(program, "utf-8")
+
+            evo_program = ctx.deps.evolve_block.reconstruct(program)
+            Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
@@ -534,11 +528,11 @@ class EvoWorker:
                     # Add the program to the database
                     db_program = Program(
                         id=str(uuid.uuid4()),
-                        code=program,
+                        code=evo_program,
                         language=self.evo_config.language,
-                        parent_id=elite_parent.id,
+                        parent_id=parent.id,
                         generation=current_gen,
-                        code_diff="agent_climb",
+                        code_diff="agent_driftaway",
                         embedding=[],
                         correct=True,
                         combined_score=combined,
@@ -554,7 +548,7 @@ class EvoWorker:
         evo_coder = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
-            deps_type=DriftContext,
+            deps_type=DriftAwayContext,
             output_type=[str, submit_novel],
             retries=3,
             model_settings=settings)
@@ -590,21 +584,14 @@ class EvoWorker:
             return r.output             
 
         @evo_coder.tool(retries = 3)
-        async def check_correctness(ctx: RunContext[DriftContext], program: str, change_type:str) -> str:
+        async def check_correctness(ctx: RunContext[DriftAwayContext], program: str, change_type:str) -> str:
             """Call this tool with a novel program that you want to check for correctness and a description
             of the change type you made. It will return the results of executing the program including its correctness. 
             It will check that the change type you provided was applied and if the program is substantially different from the parent.
             """
-
-            program = normalize_llm_program(program)
-            res = verify_evolve_block(ctx.deps.parent_code, program)
-            if not res.ok:
-                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
-            #debugpy.listen(5678)
-            #debugpy.wait_for_client()
-            #debugpy.breakpoint()   
-
-            Path(exec_fname).write_text(program, "utf-8")
+        
+            evo_program = ctx.deps.evolve_block.reconstruct(program)
+            Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
@@ -615,7 +602,7 @@ class EvoWorker:
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
-                    confirmation = await confirm_change(ctx.deps.parent_code, program, change_type)
+                    confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, program, change_type)
                     if isinstance(confirmation, VerifiedChangeAndNovel):
                         out_str += "The change type was verified and the program is substantially different from the parent.\n"
                     elif isinstance(confirmation, ChangeNotVerified):
@@ -623,9 +610,9 @@ class EvoWorker:
                     elif isinstance(confirmation, NotNovel):
                         out_str += "Change type was verified, but the program is not substantially different from the parent.\n"
                 else:
-                    out_str += "The program did not execute correctly.\n"
+                    out_str += "The program did execute correctly and didn't produce a score.\n"
             else:
-                out_str += "The program did not execute correctly and did not produce a valid result.\n"
+                out_str += "The program did not execute correctly and did not produce a valid score.\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
             out_str += "Here is the standard output of the program:\n"
@@ -638,7 +625,7 @@ class EvoWorker:
             return out_str
 
         try:
-            agent_result = evo_coder.run_sync(coder_prompt, deps=DriftContext(parent_code=normalize_llm_program(elite_parent.code)))
+            evo_coder.run_sync(coder_prompt, deps=DriftAwayContext(evolve_block=evolve_block))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 

@@ -38,7 +38,7 @@ import debugpy
 
 import textwrap
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelMessage, RunContext, RunUsage, UsageLimits
+from pydantic_ai import Agent, ModelRetry, ModelMessage, RunContext, RunUsage, UsageLimits
 import logfire
 from enum import Enum
 
@@ -69,28 +69,11 @@ class StrategyProbs(BaseModel):
 
 
 
-class ExperimentEntry(BaseModel):
-    idea: str = Field(description="Brief description of the experiment idea.")
-    outcome: str = Field(description="Outcome or observation from running the experiment.")
 
 class ClimbContext(BaseModel):
     parent_code: str = Field(description="Code of the parent program being improved.")
     parent_score: float = Field(description="Score of the parent program being improved.")
-    experiment_log: List["ExperimentEntry"] = Field(
-        default_factory=list,
-        description="Ordered log of experiments conducted and their outcomes."
-    )
-    
-class GiveUp(BaseModel):
-    """Use this when you are unable to improve the parent program."""
 
-class ImprovedProgram(BaseModel):
-    """Use this when you have successfully improved the parent program in one of your experiments.
-       Your improved program must include any unchanged code above "EVOLVE-BLOCK-START" and below the 
-       line containing "EVOLVE-BLOCK-END". 
-    """
-    improved_code: str = Field(description="The improved program code.")
-    score: float = Field(description="The score of the improved program.")
 
 class DriftContext(BaseModel):
     parent_code: str = Field(description="Code of the parent program being modified.")
@@ -644,8 +627,6 @@ class EvoWorker:
             elite_parent = ray.get(self.db.sample_archive_program.remote())
 
         coder_template = textwrap.dedent("""
-            You are an expert computer scientist improving a solution.
-            
             ### MISSION
             The code below has achieved a score of **{score}**. Your goal is to beat this score.
            
@@ -656,7 +637,7 @@ class EvoWorker:
  
             ### PROTOCOL
             You must follow the **Scientific Method**:
-            1. **Analyze:** Use the code for inspiration and come up with an approach to improve the score.
+            1. **Analyze:** Use the code for inspiration and come up with an a hypothesis on how to improve the score.
                It can be completely novel or a modification of the existing code.                     
             2. **Experiment:** Write the code to implement your idea.
             3. **Evaluate:** Use `run_experiment` to get the score.
@@ -675,9 +656,8 @@ class EvoWorker:
               - Make sure the file still runs after your changes.                        
 
             ### COMPLETION
-            - If you achieve `new_score > {score}`. Stop and return `ImprovedProgram` with your best code and score. 
-              Keep all unchanged code before and after the evolve block intact.
-            - If you cannot beat the score after 5 distinct hypotheses, return `GiveUp`.
+            - If you achieve `new_score > {score}`, submit your improved program using `submit_tool`.
+            - If you cannot beat the score after 5 distinct hypotheses, give up and offer an explanation why.
          """)
 
         coder_prompt = coder_template.format(lang=self.evo_config.language, 
@@ -687,23 +667,12 @@ class EvoWorker:
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
-        evo_coder = Agent[ClimbContext, ImprovedProgram | GiveUp](
-            model,
-            system_prompt=self.evo_config.task_sys_msg,
-            deps_type=ClimbContext,
-            output_type= ImprovedProgram | GiveUp,
-            model_settings=settings)
-
-        @evo_coder.tool
-        def run_experiment(ctx: RunContext[ClimbContext], program: str) -> str:
-            """Call this tool with a novel program that you want to evaluate. It will return
-            the results of executing the program including its score and correctness.
-            """
-
+        def submit_tool(ctx: RunContext[ClimbContext], program: str) -> None:
+            """Call this tool to submit your improved program when you have achieved a higher score."""
             program = normalize_llm_program(program)
             res = verify_evolve_block(ctx.deps.parent_code, program)
             if not res.ok:
-                return llm_fix_instructions(ctx.deps.parent_code, program, res)
+                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
             
             Path(exec_fname).write_text(program, "utf-8")
             start_time = time.time()
@@ -711,6 +680,59 @@ class EvoWorker:
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
 
+            if results.get("correct"): 
+                combined = results.get("metrics", {}).get("combined_score")
+                if combined is not None:
+                    if combined > ctx.deps.parent_score:
+                        # Add the program to the database
+                        db_program = Program(
+                            id=str(uuid.uuid4()),
+                            code=program,
+                            language=self.evo_config.language,
+                            parent_id=elite_parent.id,
+                            generation=current_gen,
+                            code_diff="agent_climb",
+                            embedding=[],
+                            correct=True,
+                            combined_score=combined,
+                        )
+                        ray.get(self.db.add.remote(db_program))
+                    else:
+                        clear_results_dir(results_dir)
+                        raise ModelRetry("Improved program did not achieve a higher score upon re-evaluation.")
+                else:
+                    clear_results_dir(results_dir)
+                    raise ModelRetry("Improved program did not return a score upon re-evaluation.")
+            else:
+                clear_results_dir(results_dir)
+                raise ModelRetry("Improved program was not correct upon re-evaluation.")
+            
+        evo_coder = Agent(
+            model,
+            system_prompt=self.evo_config.task_sys_msg,
+            deps_type=ClimbContext,
+            output_type=[str, submit_tool],
+            retries=3,
+            model_settings=settings)
+
+        @evo_coder.tool(retries = 3)
+        def run_experiment(ctx: RunContext[ClimbContext], program: str, hypothesis: str) -> str:
+            """Call this tool with a novel program that you want to evaluate. It will return
+            the results of executing the program including its score and correctness.
+            Provide a string with the hypothesis you are testing with this program.
+            """
+
+            # If code outside of the evo block is changed, raise ModelRetry
+            program = normalize_llm_program(program)
+            res = verify_evolve_block(ctx.deps.parent_code, program)
+            if not res.ok:
+                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
+            
+            Path(exec_fname).write_text(program, "utf-8")
+            start_time = time.time()
+            job_id = self.scheduler.submit_async(exec_fname, results_dir)
+            results = self.scheduler.get_job_results(job_id, results_dir)
+            rtime = time.time() - start_time
 
             out_str = ""
             if results.get("correct"):
@@ -737,39 +759,14 @@ class EvoWorker:
             clear_results_dir(results_dir)
             return out_str
 
+
         #debugpy.listen(5678)
         #debugpy.wait_for_client()
         #debugpy.breakpoint()        
         try:
-            agent_result = evo_coder.run_sync(coder_prompt, deps=ClimbContext(parent_code=normalize_llm_program(elite_parent.code), 
-                                                                              parent_score=elite_parent.combined_score))
-            
-            if isinstance(agent_result.output, ImprovedProgram):
-                Path(exec_fname).write_text(agent_result.output.improved_code, "utf-8")
-                start_time = time.time()
-                job_id = self.scheduler.submit_async(exec_fname, results_dir)
-                results = self.scheduler.get_job_results(job_id, results_dir)
-                rtime = time.time() - start_time
-                if results.get("correct"): 
-                    combined = results.get("metrics", {}).get("combined_score")
-                    if combined is not None:
-                        # Add the program to the database
-                        db_program = Program(
-                            id=str(uuid.uuid4()),
-                            code=agent_result.output.improved_code,
-                            language=self.evo_config.language,
-                            parent_id=elite_parent.id,
-                            generation=current_gen,
-                            code_diff="agent_climb",
-                            embedding=[],
-                            correct=True,
-                            combined_score=combined,
-                        )
-                        ray.get(self.db.add.remote(db_program))
-                    else:
-                        print("Improved program did not return a score upon re-evaluation.")
-                else:
-                    print("Improved program was not correct upon re-evaluation.")
+            agent_result = evo_coder.run_sync(coder_prompt, 
+                                              deps=ClimbContext(parent_code=normalize_llm_program(elite_parent.code), 
+                                                                parent_score=elite_parent.combined_score))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 
@@ -817,7 +814,7 @@ class EvoWorker:
               - Make sure the file still runs after your changes.
                                                       
             ### COMPLETION
-            - If you succeed in finding a correct and novel program return `NovelProgram` with your code.
+            - If change type was verified and the program is substantially different from the parent, return `NovelProgram` with your code.
             - If you cannot find a correct and novel program after 5 attempts, return `GiveUp`.
          """)
 

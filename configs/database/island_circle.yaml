@@ -2,7 +2,7 @@
 db_config:
   _target_: rayevolve.database.DatabaseConfig
   db_path: "evolution_db.sqlite"
-  archive_size: 40
+  archive_size: 8
   num_archive_inspirations: 4
   migration_interval: 10
   island_elitism: true

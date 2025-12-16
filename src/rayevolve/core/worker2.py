@@ -74,13 +74,15 @@ class ClimbContext(BaseModel):
 class DriftAwayContext(BaseModel):
     evolve_block: EvolveBlock
 
-class VerifiedChangeAndNovel(BaseModel):
-    """Use this when you can verify the change type and the program is novel."""
-    reasoning: str = Field(description="Explanation of the verification and novelty.")
+class VerifiedChange(BaseModel):
+    """Use this when you can verify that the type of change provided was indeed made to the program."""
 
 class ChangeNotVerified(BaseModel):
-    """Use this when the change type could not be verified."""
-    reasoning: str = Field(description="Explanation of why the change type could not be verified.")
+    """Use this when type of change provided was *NOT* made to the program."""
+    reasoning: str = Field(description="Explanation of why the change type was not verified.")
+
+class NovelProgram(BaseModel):
+    """Use this when the provided program is indeed substantially different from the parent."""
 
 class NotNovel(BaseModel):
     """Use this when the program is not substantially different from the parent."""
@@ -248,15 +250,15 @@ class EvoWorker:
         #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            # self.agent_driftaway(current_gen)
+            self.agent_driftaway(current_gen)
             # self.run_strategy(current_gen)
-            if random.random() < 0.5:
-                self.agent_driftaway(current_gen)
-            else:
-                if random.random() < 0.5:
-                    self.agent_climb(current_gen)
-                else:
-                    self.agent_climb_or_drift(current_gen, drift_up=True)
+            #if random.random() < 0.5:
+            #    self.agent_driftaway(current_gen)
+            #else:
+            #    if random.random() < 0.5:
+            #        self.agent_climb(current_gen)
+            #    else:
+            #        self.agent_climb_or_drift(current_gen, drift_up=True)
 
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
@@ -370,8 +372,11 @@ class EvoWorker:
                                              score=parent.combined_score)
 
         def submit_tool(ctx: RunContext[ClimbContext], program: str) -> None:
-            """Call this tool to submit your improved program when you have achieved a higher score."""
-
+            """
+            Submit an improved program when you achieve a higher score relative to the parent program.
+            Args:
+                program: Code for the program that achieved a higher score.
+            """            
             evo_program = ctx.deps.evolve_block.reconstruct(program)
             Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
@@ -419,11 +424,15 @@ class EvoWorker:
 
         @evo_coder.tool(retries = 3)
         def run_experiment(ctx: RunContext[ClimbContext], program: str, hypothesis: str) -> str:
-            """Call this tool with a novel program that you want to evaluate. It will return
-            the results of executing the program including its score and correctness.
-            Provide a string with the hypothesis you are testing with this program.
             """
-
+            Call this tool with a novel program that you want to evaluate. It will return
+            the results of executing the program including its score and correctness.
+            Args:
+                program: A program that you think will achieve a higher score.
+                hypothesis: A detailed description of the change being tested and why it should improve performance.
+            Returns:
+                str: A human-readable report of the results of the experiment.
+            """
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
@@ -513,10 +522,92 @@ class EvoWorker:
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
-        def submit_novel(ctx: RunContext[DriftAwayContext], program: str) -> None:
-            """Call this tool to submit your novel program."""
+        evo_change = Agent(model, output_type=VerifiedChange | ChangeNotVerified, model_settings=settings)
+        evo_diff = Agent(model, output_type=NotNovel | NovelProgram, model_settings=settings)
 
-            evo_program = ctx.deps.evolve_block.reconstruct(program)
+        async def confirm_change(parent_code: str, novel_code: str, change_type: str) -> str:
+            """
+            Verify that the specified change type was applied to the novel program relative to the parent.
+
+            Args:
+                parent_code: The source code of the parent program.
+                novel_code: The source code of the proposed novel program.
+                change_type: A detailed description of the modification made (e.g., algorithmic change,
+                    refactoring, control-flow alteration, etc.).
+
+            Returns:
+                A structured result indicating verification status:
+                - VerifiedChange: The change type was confirmed and the program is substantially different.
+                - ChangeNotVerified: The change type could not be confirmed or the program is not sufficiently novel,
+                  with an explanation of why.
+            """
+            change_template = textwrap.dedent("""
+            Given the the following parent program and new program
+            Parent program:                                                                
+            ```{lang}
+            {parent_code}
+            ```
+            New program:                                
+            ```{lang}
+            {proposed_program}
+            ```
+            Verify that the the following change type was made:
+            {change_type} 
+            Return `VerifiedChange` if the change described above was made to the code.
+            Return `ChangeNotVerified` if the program is not substantially different from the parent, explain why.
+            """)
+            change_prompt = change_template.format(parent_code=parent_code,
+                                              proposed_program=novel_code,
+                                              change_type=change_type,
+                                              lang=self.evo_config.language)
+            r = await evo_change.run(change_prompt)
+            return r.output
+
+        async def confirm_novelty(parent_code: str, novel_code: str) -> bool:
+            """
+            Evaluate whether the proposed program is substantially novel relative to the parent program.
+
+            Args:
+                parent_code: Source code of the parent program used as the baseline.
+                novel_code: Source code of the proposed novel program to evaluate.
+
+            Returns:
+                A structured verdict produced by `evo_diff`:
+                - VerifiedChangeAndNovel: The program exhibits substantial, meaningful differences.
+                - NotNovel: The program is not sufficiently different, with reasoning.
+            """            
+            diff_template = textwrap.dedent("""
+            Given the the following parent program and new program
+            Parent program:                                                                
+            ```{lang}
+            {parent_code}
+            ```
+            New program:                                
+            ```{lang}
+            {proposed_program}
+            ```
+            Does the new program have substantial changes including algorithmic, changes to
+            modularization, data flow, control flow, or architectural patterns, or changes in parameters and parameterization.   
+            from the parent program? Your bar should be high for what constitutes a substantial change.
+            Return `NovelProgram` if the program is substantially different from the parent.
+            Return `NotNovel` if the program is not substantially different from the parent and explain why. 
+            """)
+            diff_prompt = diff_template.format(parent_code=parent_code,
+                                              proposed_program=novel_code,
+                                              lang=self.evo_config.language)
+            r = await evo_diff.run(diff_prompt)
+            return r.output
+
+        async def submit_novel(ctx: RunContext[DriftAwayContext], novel_program: str, change_type: str) -> None:
+            """
+            Submit a proposed novel program.
+            Args:
+                novel_program: A novel program that is dramatically different from the parent that 
+                    still functions correctly.
+                change_type: A detailed description of the modification made (e.g., algorithmic change,
+                    refactoring, control-flow alteration, etc.).                
+            """
+            evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
@@ -526,6 +617,19 @@ class EvoWorker:
             if results.get("correct"): 
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
+                    confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change_type)
+                    novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
+                    raise_str = ""
+                    if isinstance(confirmation, ChangeNotVerified):
+                        raise_str += "The change type could not be verified on re-evaluation. Here is the reason:\n"
+                        raise_str += confirmation.reasoning + "\n"
+                    if isinstance(novelty, NotNovel):
+                        raise_str += "The program is not substantially different from the parent program on re-evaluation. Here is the reason:\n"
+                        raise_str += novelty.reasoning + "\n"
+                    if raise_str != "":
+                        clear_results_dir(results_dir)
+                        raise ModelRetry(raise_str)
+
                     # Add the program to the database
                     db_program = Program(
                         id=str(uuid.uuid4()),
@@ -554,62 +658,43 @@ class EvoWorker:
             retries=3,
             model_settings=settings)
 
-        evo_diff = Agent(model, output_type=VerifiedChangeAndNovel | NotNovel | ChangeNotVerified,
-                         model_settings=settings)
-
-        async def confirm_change(parent_code: str, novel_code: str, change_type: str) -> str:
-            diff_template = textwrap.dedent("""
-            Given the the following parent program and new program
-            Parent program:                                                                
-            ```{lang}
-            {parent_code}
-            ```
-            New program:                                
-            ```{lang}
-            {proposed_program}
-            ```
-            1. Verify that the the following change type was made:
-            {change_type} 
-            2. Does this change result in a program that has substantial changes including algorithmic, changes to
-               modularization, data flow, control flow, or architectural patterns, or changes in parameters and parameterization.   
-               from the parent program?
-            Return `VerifiedChangeAndNovel` if the change type could be verified and the program is substantially different.
-            Return `ChangeNotVerified` if the change type could not be verified.
-            Return `NotNovel` if the program is not substantially different from the parent.                                            
-            """)
-            diff_prompt = diff_template.format(parent_code=parent_code,
-                                              proposed_program=novel_code,
-                                              change_type=change_type,
-                                              lang=self.evo_config.language)
-            r = await evo_diff.run(diff_prompt)
-            return r.output             
-
         @evo_coder.tool(retries = 3)
-        async def check_correctness(ctx: RunContext[DriftAwayContext], program: str, change_type:str) -> str:
-            """Call this tool with a novel program that you want to check for correctness and a description
-            of the change type you made. It will return the results of executing the program including its correctness. 
-            It will check that the change type you provided was applied and if the program is substantially different from the parent.
+        async def check_novelty_and_correctness(ctx: RunContext[DriftAwayContext], novel_program: str, change_type:str) -> str:
             """
-        
-            evo_program = ctx.deps.evolve_block.reconstruct(program)
+            Evaluate a proposed inner block for correctness and verify the described change type.
+
+            Args:
+                novel_program: A string containing a novel program that is dramtically different from the parent.
+                change_type: A detailed description of the modification made (e.g., algorithmic change,
+                    refactoring, control-flow alteration, etc.).                
+            Returns:
+                str: feedback for the agent including correctness, change verification, and novelty status.
+            """
+            evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
-             
+
             out_str = ""
             if results.get("correct"):
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
-                    confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, program, change_type)
-                    if isinstance(confirmation, VerifiedChangeAndNovel):
-                        out_str += "The change type was verified and the program is substantially different from the parent.\n"
+                    confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change_type)
+                    novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
+
+                    if isinstance(confirmation, VerifiedChange):
+                        out_str += "The change type described was made to the program.\n"
                     elif isinstance(confirmation, ChangeNotVerified):
-                        out_str += "The change type could not be verified.\n"
-                    elif isinstance(confirmation, NotNovel):
-                        out_str += "Change type was verified, but the program is not substantially different from the parent.\n"
+                        out_str += "The change type could not be verified. Here is the reason:\n"
+                        out_str += confirmation.reasoning + "\n"
+                    if isinstance(novelty, NovelProgram):
+                        out_str += "The program is substantially different from the parent program.\n"
+                    elif isinstance(novelty, NotNovel):
+                        out_str += "The program is not substantially different from the parent program. Here is the reason:\n"
+                        out_str += novelty.reasoning + "\n"
                 else:
                     out_str += "The program did execute correctly and didn't produce a score.\n"
             else:

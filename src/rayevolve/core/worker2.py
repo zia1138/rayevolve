@@ -540,15 +540,14 @@ class EvoWorker:
         #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            self.agent_climb(current_gen)
             # self.run_strategy(current_gen)
-            #if random.random() < 0.5:
-            #    self.agent_driftaway(current_gen)
-            #else:
-            #    if random.random() < 0.5:
-            #        self.agent_climb(current_gen)
-            #    else:
-            #        self.agent_climb_or_drift(current_gen, drift_up=True)
+            if random.random() < 0.5:
+                self.agent_driftaway(current_gen)
+            else:
+                if random.random() < 0.5:
+                    self.agent_climb(current_gen)
+                else:
+                    self.agent_climb_or_drift(current_gen, drift_up=True)
 
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
@@ -712,7 +711,7 @@ class EvoWorker:
             system_prompt=self.evo_config.task_sys_msg,
             deps_type=ClimbContext,
             output_type=[str, submit_tool],
-            retries=3,
+            retries=3,            
             model_settings=settings)
 
         @evo_coder.tool(retries = 3)
@@ -764,9 +763,9 @@ class EvoWorker:
         #debugpy.wait_for_client()
         #debugpy.breakpoint()        
         try:
-            agent_result = evo_coder.run_sync(coder_prompt, 
-                                              deps=ClimbContext(parent_code=normalize_llm_program(elite_parent.code), 
-                                                                parent_score=elite_parent.combined_score))
+            evo_coder.run_sync(coder_prompt, 
+                               deps=ClimbContext(parent_code=normalize_llm_program(elite_parent.code), 
+                                                 parent_score=elite_parent.combined_score))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 
@@ -784,11 +783,9 @@ class EvoWorker:
         elite_parent = ray.get(self.db.sample_all_programs.remote())
 
         coder_template = textwrap.dedent("""
-            You are an expert computer scientist finding novel solutions.
-            
             ### MISSION
             The code is below. Your goal is to produce a different solution that still works correctly.   
-            You can make many different types of substantive changes including algorithmic, changes to
+            You should make many different types of substantive changes including algorithmic, changes to
             modularization, data flow, control flow, or architectural patterns, or changes in parameters
             and parameterization.                                                                  
            
@@ -814,8 +811,8 @@ class EvoWorker:
               - Make sure the file still runs after your changes.
                                                       
             ### COMPLETION
-            - If change type was verified and the program is substantially different from the parent, return `NovelProgram` with your code.
-            - If you cannot find a correct and novel program after 5 attempts, return `GiveUp`.
+            - If change type was verified and the program is substantially different from the parent, use the submit_novel tool to submit your novel program.
+            - If you cannot find a correct and novel program after 5 attempts explain why and give up.
          """)
 
         coder_prompt = coder_template.format(lang=self.evo_config.language, 
@@ -824,11 +821,48 @@ class EvoWorker:
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
-        evo_coder = Agent[DriftContext, NovelProgram | GiveUp](
+        def submit_novel(ctx: RunContext[ClimbContext], program: str) -> None:
+            """Call this tool to submit your novel program."""
+            program = normalize_llm_program(program)
+            res = verify_evolve_block(ctx.deps.parent_code, program)
+            if not res.ok:
+                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
+            
+            Path(exec_fname).write_text(program, "utf-8")
+            start_time = time.time()
+            job_id = self.scheduler.submit_async(exec_fname, results_dir)
+            results = self.scheduler.get_job_results(job_id, results_dir)
+            rtime = time.time() - start_time
+
+            if results.get("correct"): 
+                combined = results.get("metrics", {}).get("combined_score")
+                if combined is not None:
+                    # Add the program to the database
+                    db_program = Program(
+                        id=str(uuid.uuid4()),
+                        code=program,
+                        language=self.evo_config.language,
+                        parent_id=elite_parent.id,
+                        generation=current_gen,
+                        code_diff="agent_climb",
+                        embedding=[],
+                        correct=True,
+                        combined_score=combined,
+                    )
+                    ray.get(self.db.add.remote(db_program))
+                else:
+                    clear_results_dir(results_dir)
+                    raise ModelRetry("Novel program did not return a score upon re-evaluation.")
+            else:
+                clear_results_dir(results_dir)
+                raise ModelRetry("Novel program was not correct upon re-evaluation.")
+
+        evo_coder = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
             deps_type=DriftContext,
-            output_type=NovelProgram | GiveUp,
+            output_type=[str, submit_novel],
+            retries=3,
             model_settings=settings)
 
         evo_diff = Agent(model, output_type=VerifiedChangeAndNovel | NotNovel | ChangeNotVerified,
@@ -861,7 +895,7 @@ class EvoWorker:
             r = await evo_diff.run(diff_prompt)
             return r.output             
 
-        @evo_coder.tool
+        @evo_coder.tool(retries = 3)
         async def check_correctness(ctx: RunContext[DriftContext], program: str, change_type:str) -> str:
             """Call this tool with a novel program that you want to check for correctness and a description
             of the change type you made. It will return the results of executing the program including its correctness. 
@@ -871,11 +905,10 @@ class EvoWorker:
             program = normalize_llm_program(program)
             res = verify_evolve_block(ctx.deps.parent_code, program)
             if not res.ok:
-                return llm_fix_instructions(ctx.deps.parent_code, program, res)
+                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
             #debugpy.listen(5678)
             #debugpy.wait_for_client()
             #debugpy.breakpoint()   
-
 
             Path(exec_fname).write_text(program, "utf-8")
             start_time = time.time()
@@ -912,31 +945,6 @@ class EvoWorker:
 
         try:
             agent_result = evo_coder.run_sync(coder_prompt, deps=DriftContext(parent_code=normalize_llm_program(elite_parent.code)))
-            
-            if isinstance(agent_result.output, NovelProgram):
-                Path(exec_fname).write_text(agent_result.output.novel_code, "utf-8")
-                job_id = self.scheduler.submit_async(exec_fname, results_dir)
-                results = self.scheduler.get_job_results(job_id, results_dir)
-                if results.get("correct"): 
-                    combined = results.get("metrics", {}).get("combined_score")
-                    if combined is not None:
-                        # Add the program to the database
-                        db_program = Program(
-                            id=str(uuid.uuid4()),
-                            code=agent_result.output.novel_code,
-                            language=self.evo_config.language,
-                            parent_id=elite_parent.id,
-                            generation=current_gen,
-                            code_diff="agent_climb",
-                            embedding=[],
-                            correct=True,
-                            combined_score=combined,
-                        )
-                        ray.get(self.db.add.remote(db_program))
-                    else:
-                        print("Program did not return a score upon re-evaluation.")
-                else:
-                    print("Program was not correct upon re-evaluation.")
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 

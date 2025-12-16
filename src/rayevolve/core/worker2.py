@@ -9,7 +9,7 @@ from rich.logging import RichHandler
 from rich.table import Table
 from rich.console import Console
 import rich.box
-from typing import List, Optional, Union, cast
+from typing import List, Optional, Union, cast, Tuple
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
@@ -67,23 +67,12 @@ class StrategyProbs(BaseModel):
             raise ValueError("All probabilities are zero or negative")
         return {k: v / total for k, v in weights.items()}
 
-
-
-
 class ClimbContext(BaseModel):
-    parent_code: str = Field(description="Code of the parent program being improved.")
+    evolve_block: EvolveBlock = Field(description="Code of the parent program being improved.")
     parent_score: float = Field(description="Score of the parent program being improved.")
-
-
+    
 class DriftContext(BaseModel):
     parent_code: str = Field(description="Code of the parent program being modified.")
-
-class NovelProgram(BaseModel):
-    """Use this when you have discovered a novel and correct program.
-       Your novel program must include any unchanged code above "EVOLVE-BLOCK-START" and below the 
-       line containing "EVOLVE-BLOCK-END". 
-    """
-    novel_code: str = Field(description="Novel and correct program code.")
 
 class VerifiedChangeAndNovel(BaseModel):
     """Use this when you can verify the change type and the program is novel."""
@@ -96,361 +85,6 @@ class ChangeNotVerified(BaseModel):
 class NotNovel(BaseModel):
     """Use this when the program is not substantially different from the parent."""
     reasoning: str = Field(description="Explanation of why the program is not novel.")
-
-
-
-#from __future__ import annotations
-
-import difflib
-from dataclasses import dataclass
-from enum import Enum
-from typing import Optional
-
-
-class EvolveErrorType(str, Enum):
-    TAGS_NOT_PRESENT = "tags_not_present"
-    MULTIPLE_START_TAGS = "multiple_start_tags"
-    MULTIPLE_END_TAGS = "multiple_end_tags"
-    START_AFTER_END = "start_after_end"
-
-    CHANGED_ABOVE = "changed_above"
-    CHANGED_BELOW = "changed_below"
-    NOT_CHANGED_BETWEEN = "not_changed_between"
-
-
-@dataclass(frozen=True)
-class TagPositions:
-    start_idx: Optional[int] = None  # 0-based line index
-    end_idx: Optional[int] = None    # 0-based line index
-
-
-@dataclass(frozen=True)
-class EvolveVerificationResult:
-    ok: bool
-    errors: tuple[tuple[EvolveErrorType, str], ...]
-    original_tags: TagPositions
-    updated_tags: TagPositions
-    above_changed: Optional[bool] = None
-    between_changed: Optional[bool] = None
-    below_changed: Optional[bool] = None
-
-
-def verify_evolve_block(
-    original_text: str,
-    updated_text: str,
-    start_tag: str = "EVOLVE-BLOCK-START",
-    end_tag: str = "EVOLVE-BLOCK-END",
-    *,
-    require_tags_on_own_line: bool = False,
-) -> EvolveVerificationResult:
-    def split_lines(s: str) -> list[str]:
-        return s.splitlines()
-
-    def find_tag_lines(lines: list[str], tag: str) -> list[int]:
-        if require_tags_on_own_line:
-            return [i for i, ln in enumerate(lines) if ln.strip() == tag]
-        return [i for i, ln in enumerate(lines) if tag in ln]
-
-    def get_positions(lines: list[str]) -> TagPositions:
-        starts = find_tag_lines(lines, start_tag)
-        ends = find_tag_lines(lines, end_tag)
-        return TagPositions(
-            start_idx=starts[0] if starts else None,
-            end_idx=ends[0] if ends else None,
-        )
-
-    orig_lines = split_lines(original_text)
-    upd_lines = split_lines(updated_text)
-
-    o_starts = find_tag_lines(orig_lines, start_tag)
-    o_ends = find_tag_lines(orig_lines, end_tag)
-    u_starts = find_tag_lines(upd_lines, start_tag)
-    u_ends = find_tag_lines(upd_lines, end_tag)
-
-    errors: list[tuple[EvolveErrorType, str]] = []
-
-    def validate(which: str, starts: list[int], ends: list[int]) -> None:
-        if not starts or not ends:
-            errors.append((EvolveErrorType.TAGS_NOT_PRESENT, f"{which}: missing start and/or end tag"))
-            return
-        if len(starts) > 1:
-            errors.append((EvolveErrorType.MULTIPLE_START_TAGS, f"{which}: found {len(starts)} start tags"))
-        if len(ends) > 1:
-            errors.append((EvolveErrorType.MULTIPLE_END_TAGS, f"{which}: found {len(ends)} end tags"))
-        if len(starts) == 1 and len(ends) == 1 and starts[0] > ends[0]:
-            errors.append((EvolveErrorType.START_AFTER_END, f"{which}: start tag occurs after end tag"))
-
-    validate("original", o_starts, o_ends)
-    validate("updated", u_starts, u_ends)
-
-    original_tags = get_positions(orig_lines)
-    updated_tags = get_positions(upd_lines)
-
-    fatal = {
-        EvolveErrorType.TAGS_NOT_PRESENT,
-        EvolveErrorType.MULTIPLE_START_TAGS,
-        EvolveErrorType.MULTIPLE_END_TAGS,
-        EvolveErrorType.START_AFTER_END,
-    }
-    if any(et in fatal for et, _ in errors):
-        return EvolveVerificationResult(
-            ok=False,
-            errors=tuple(errors),
-            original_tags=original_tags,
-            updated_tags=updated_tags,
-            above_changed=None,
-            between_changed=None,
-            below_changed=None,
-        )
-
-    # Single, ordered tags in both documents
-    o_start, o_end = o_starts[0], o_ends[0]
-    u_start, u_end = u_starts[0], u_ends[0]
-
-    o_above = orig_lines[:o_start]
-    o_between = orig_lines[o_start + 1 : o_end]
-    o_below = orig_lines[o_end + 1 :]
-
-    u_above = upd_lines[:u_start]
-    u_between = upd_lines[u_start + 1 : u_end]
-    u_below = upd_lines[u_end + 1 :]
-
-    above_same = (o_above == u_above)
-    below_same = (o_below == u_below)
-    between_changed = (o_between != u_between)
-
-    if not above_same:
-        errors.append((EvolveErrorType.CHANGED_ABOVE, "Content changed above the start tag line"))
-    if not below_same:
-        errors.append((EvolveErrorType.CHANGED_BELOW, "Content changed below the end tag line"))
-    if not between_changed:
-        errors.append((EvolveErrorType.NOT_CHANGED_BETWEEN, "No changes detected between tag lines"))
-
-    return EvolveVerificationResult(
-        ok=(len(errors) == 0),
-        errors=tuple(errors),
-        original_tags=TagPositions(start_idx=o_start, end_idx=o_end),
-        updated_tags=TagPositions(start_idx=u_start, end_idx=u_end),
-        above_changed=(not above_same),
-        between_changed=between_changed,
-        below_changed=(not below_same),
-    )
-
-
-def llm_fix_instructions(
-    original_text: str,
-    updated_text: str,
-    result: EvolveVerificationResult,
-    *,
-    start_tag: str = "EVOLVE-BLOCK-START",
-    end_tag: str = "EVOLVE-BLOCK-END",
-    require_tags_on_own_line: bool = False,
-    max_diff_lines: int = 400,
-) -> str:
-    """
-    Returns plain instructions for an LLM on how to fix updated_text to satisfy rules.
-    IMPORTANT: This function ONLY shows diffs for *disallowed* changes (ABOVE/BELOW).
-               It never shows diffs of allowed BETWEEN edits.
-    """
-
-    def split_lines(s: str) -> list[str]:
-        return s.splitlines()
-
-    def unified(a_lines: list[str], b_lines: list[str], fromfile: str, tofile: str) -> str:
-        diff_iter = difflib.unified_diff(a_lines, b_lines, fromfile=fromfile, tofile=tofile, lineterm="")
-        diff_lines = list(diff_iter)
-        if not diff_lines:
-            return "(no diff)"
-        if len(diff_lines) > max_diff_lines:
-            head = diff_lines[: max_diff_lines // 2]
-            tail = diff_lines[-max_diff_lines // 2 :]
-            return "\n".join(head + ["... (diff truncated) ..."] + tail)
-        return "\n".join(diff_lines)
-
-    def has_error(t: EvolveErrorType) -> bool:
-        return any(code == t for code, _ in result.errors)
-
-    def fmt_line(idx0: Optional[int]) -> str:
-        return "N/A" if idx0 is None else str(idx0 + 1)
-
-    # If OK, minimal instruction.
-    if result.ok:
-        return (
-            "All constraints are satisfied.\n"
-            "- Tags are present.\n"
-            "- Content outside the tags is unchanged.\n"
-            "- Content between the tags has changed.\n"
-        )
-
-    orig_lines = split_lines(original_text)
-    upd_lines = split_lines(updated_text)
-
-    lines: list[str] = []
-    lines.append("Fix the updated code to satisfy these constraints:")
-    lines.append(f"- There must be exactly one '{start_tag}' line and exactly one '{end_tag}' line.")
-    lines.append("- Do not change any content above the start tag line.")
-    lines.append("- Do not change any content below the end tag line.")
-    lines.append("- Make at least one change strictly between the tag lines.")
-    lines.append("")
-    lines.append("Tag locations (1-based line numbers):")
-    lines.append(f"- original: start={fmt_line(result.original_tags.start_idx)}, end={fmt_line(result.original_tags.end_idx)}")
-    lines.append(f"- updated:  start={fmt_line(result.updated_tags.start_idx)}, end={fmt_line(result.updated_tags.end_idx)}")
-    lines.append("")
-
-    # Tag / structure errors: explicit corrective steps (no diffs; regions not reliable).
-    fatal = {
-        EvolveErrorType.TAGS_NOT_PRESENT,
-        EvolveErrorType.MULTIPLE_START_TAGS,
-        EvolveErrorType.MULTIPLE_END_TAGS,
-        EvolveErrorType.START_AFTER_END,
-    }
-    if any(code in fatal for code, _ in result.errors):
-        if has_error(EvolveErrorType.TAGS_NOT_PRESENT):
-            lines.append("ERROR: Tags are missing.")
-            lines.append("Fix:")
-            lines.append(f"- Add exactly one line containing '{start_tag}' and exactly one line containing '{end_tag}'.")
-            lines.append("- Place them so the editable block is between them.")
-            lines.append("- Keep everything outside the tags identical to the original.")
-            lines.append("")
-        if has_error(EvolveErrorType.MULTIPLE_START_TAGS):
-            lines.append("ERROR: Multiple start tags found.")
-            lines.append("Fix:")
-            lines.append(f"- Remove extra '{start_tag}' lines so only one remains.")
-            lines.append("")
-        if has_error(EvolveErrorType.MULTIPLE_END_TAGS):
-            lines.append("ERROR: Multiple end tags found.")
-            lines.append("Fix:")
-            lines.append(f"- Remove extra '{end_tag}' lines so only one remains.")
-            lines.append("")
-        if has_error(EvolveErrorType.START_AFTER_END):
-            lines.append("ERROR: Start tag occurs after end tag.")
-            lines.append("Fix:")
-            lines.append(f"- Reorder so '{start_tag}' appears before '{end_tag}'.")
-            lines.append("")
-        lines.append("After fixing tags, make edits ONLY between the tags.")
-        return "\n".join(lines)
-
-    # Safe to segment.
-    o_start = result.original_tags.start_idx
-    o_end = result.original_tags.end_idx
-    u_start = result.updated_tags.start_idx
-    u_end = result.updated_tags.end_idx
-    assert None not in (o_start, o_end, u_start, u_end)
-
-    o_above = orig_lines[:o_start]
-    u_above = upd_lines[:u_start]
-    o_between = orig_lines[o_start + 1 : o_end]
-    u_between = upd_lines[u_start + 1 : u_end]
-    o_below = orig_lines[o_end + 1 :]
-    u_below = upd_lines[u_end + 1 :]
-
-    if has_error(EvolveErrorType.CHANGED_ABOVE):
-        lines.append("ERROR: Disallowed changes detected ABOVE the start tag.")
-        lines.append("Fix:")
-        lines.append("- Revert the ABOVE region to exactly match the original.")
-        lines.append("Diff to undo (original -> updated) for ABOVE:")
-        lines.append("```diff")
-        lines.append(unified(o_above, u_above, "original:ABOVE", "updated:ABOVE"))
-        lines.append("```")
-        lines.append("")
-
-    if has_error(EvolveErrorType.CHANGED_BELOW):
-        lines.append("ERROR: Disallowed changes detected BELOW the end tag.")
-        lines.append("Fix:")
-        lines.append("- Revert the BELOW region to exactly match the original.")
-        lines.append("Diff to undo (original -> updated) for BELOW:")
-        lines.append("```diff")
-        lines.append(unified(o_below, u_below, "original:BELOW", "updated:BELOW"))
-        lines.append("```")
-        lines.append("")
-
-    if has_error(EvolveErrorType.NOT_CHANGED_BETWEEN):
-        lines.append("ERROR: No changes detected BETWEEN the tags (this region must change).")
-        lines.append("Fix:")
-        lines.append("- Make at least one edit strictly between the tag lines.")
-        lines.append("- Do not change the tag lines.")
-        lines.append("- Do not change anything above or below the tags.")
-        lines.append("")
-
-        # Optional: if BETWEEN is empty, suggest adding something.
-        if len(o_between) == 0 and len(u_between) == 0:
-            lines.append("Note: The region between the tags is currently empty; add content there.")
-            lines.append("")
-
-    lines.append("Stop when:")
-    lines.append("- ABOVE and BELOW match the original exactly,")
-    lines.append("- and BETWEEN differs from the original.")
-    return "\n".join(lines)
-
-import re
-from typing import Optional
-
-_FENCE_RE = re.compile(r"^\s*```[^\n]*\n", re.IGNORECASE)
-_FENCE_END_RE = re.compile(r"\n\s*```\s*$", re.IGNORECASE)
-
-def strip_outer_blank_lines(text: str) -> str:
-    """
-    Remove ALL leading and trailing blank lines (including whitespace-only lines).
-    Does not touch internal blank lines.
-    """
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-
-    start = 0
-    while start < len(lines) and not lines[start].strip():
-        start += 1
-
-    end = len(lines)
-    while end > start and not lines[end - 1].strip():
-        end -= 1
-
-    return "\n".join(lines[start:end])
-
-
-def unwrap_markdown_code_fences(text: str) -> str:
-    """
-    If the content is wrapped in a single outer Markdown fence, remove it.
-    If multiple fenced blocks exist, return the largest fenced block.
-    """
-    # Fast path: entire content is a single fenced block
-    if _FENCE_RE.search(text) and _FENCE_END_RE.search(text):
-        text2 = _FENCE_RE.sub("", text, count=1)
-        text2 = _FENCE_END_RE.sub("", text2, count=1)
-        return text2
-
-    # Otherwise, extract fenced blocks and return the largest
-    blocks = []
-    for m in re.finditer(r"```[^\n]*\n([\s\S]*?)\n```", text):
-        blocks.append(m.group(1))
-    if blocks:
-        return max(blocks, key=len)
-
-    return text
-
-
-def normalize_llm_program(text: str) -> str:
-    """
-    Normalization order:
-      1) Normalize line endings
-      2) Remove leading/trailing blank lines
-      3) Remove outer Markdown code fences
-      4) Remove leading/trailing blank lines again (fences often introduce them)
-
-    Result is stable for diffing.
-    """
-    # 1) Normalize line endings
-    t = text.replace("\r\n", "\n").replace("\r", "\n")
-
-    # 2) Strip blank lines first (prevents fake ABOVE/BELOW diffs)
-    t = strip_outer_blank_lines(t)
-
-    # 3) Remove Markdown fences
-    t = unwrap_markdown_code_fences(t)
-
-    # 4) Strip blank lines again (post-fence cleanup)
-    t = strip_outer_blank_lines(t)
-
-    return t
-
 
 def clear_results_dir(results_dir: str) -> None:
     """
@@ -466,6 +100,80 @@ def clear_results_dir(results_dir: str) -> None:
                 child.unlink()
         except Exception as e:
             logger.warning(f"Failed to delete {child}: {e}")
+
+
+class EvolveBlock(BaseModel):
+    """
+    Represents the dissected components of a source code file containing
+    EVOLVE-BLOCK markers.
+    """
+    pre_block: str = Field(description="Content before the EVOLVE-BLOCK-START line.")
+    start_marker_line: str = Field(description="The complete line containing the EVOLVE-BLOCK-START marker.")
+    inner_content: str = Field(description="The original code content between the markers.")
+    end_marker_line: str = Field(description="The complete line containing the EVOLVE-BLOCK-END marker.")
+    post_block: str = Field(description="Content after the EVOLVE-BLOCK-END line.")
+ 
+    def reconstruct(self, new_inner_content: str) -> str:
+        """
+        Reconstructs the full source code using these surrounding parts and
+        the provided new inner content. Handles newline normalization.
+        """
+        # 1. Clean the new content (remove leading/trailing whitespace/newlines)
+        cleaned_inner = new_inner_content.strip()
+        
+        # 2. Ensure the start marker line ends with a newline (safety check)
+        start_line = self.start_marker_line
+        if not start_line.endswith('\n') and not start_line.endswith('\r'):
+            start_line += '\n'
+ 
+        # 3. Format the inner block with a trailing newline if it has content
+        formatted_inner = ""
+        if cleaned_inner:
+            formatted_inner = cleaned_inner + '\n'
+ 
+        # 4. Concatenate
+        return f"{self.pre_block}{start_line}{formatted_inner}{self.end_marker_line}{self.post_block}"
+
+def extract_evolve_block(full_code: str) -> EvolveBlock:
+    """
+    Parses a source code string and returns a EvolveBlock object containing
+    the separated components.
+    
+    Raises:
+        ValueError: If markers are missing, duplicated, or out of order.
+    """
+    lines = full_code.splitlines(keepends=True)
+    
+    start_index = -1
+    end_index = -1
+     
+    # Linear scan to find marker lines
+    for i, line in enumerate(lines):
+        if "EVOLVE-BLOCK-START" in line:
+            if start_index != -1:
+                raise ValueError("Multiple EVOLVE-BLOCK-START markers found.")
+            start_index = i
+        elif "EVOLVE-BLOCK-END" in line:
+            if end_index != -1:
+                raise ValueError("Multiple EVOLVE-BLOCK-END markers found.")
+            end_index = i
+             
+    # Validation Logic
+    if start_index == -1:
+        raise ValueError("EVOLVE-BLOCK-START marker not found in code.")
+    if end_index == -1:
+        raise ValueError("EVOLVE-BLOCK-END marker not found in code.")
+    if start_index >= end_index:
+        raise ValueError(f"EVOLVE-BLOCK-START (line {start_index+1}) appears after or on same line as EVOLVE-BLOCK-END (line {end_index+1}).")
+ 
+    # Construct the Pydantic Model
+    return EvolveBlock(
+        pre_block="".join(lines[:start_index]),
+        start_marker_line=lines[start_index],
+        inner_content="".join(lines[start_index+1 : end_index]),
+        end_marker_line=lines[end_index],
+        post_block="".join(lines[end_index+1:])
+    )
 
 @ray.remote
 class EvoGen:
@@ -540,14 +248,15 @@ class EvoWorker:
         #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
+            self.agent_climb(current_gen)
             # self.run_strategy(current_gen)
-            if random.random() < 0.5:
-                self.agent_driftaway(current_gen)
-            else:
-                if random.random() < 0.5:
-                    self.agent_climb(current_gen)
-                else:
-                    self.agent_climb_or_drift(current_gen, drift_up=True)
+            #if random.random() < 0.5:
+            #    self.agent_driftaway(current_gen)
+            #else:
+            #    if random.random() < 0.5:
+            #        self.agent_climb(current_gen)
+            #    else:
+            #        self.agent_climb_or_drift(current_gen, drift_up=True)
 
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
@@ -618,12 +327,16 @@ class EvoWorker:
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
+        
+        print("Current Generation:", current_gen)
 
         if drift_up:
             # Sample from non-elite programs for drift up.
-            elite_parent = ray.get(self.db.sample_all_programs.remote())
+            parent = ray.get(self.db.sample_all_programs.remote())
         else:        
-            elite_parent = ray.get(self.db.sample_archive_program.remote())
+            parent = ray.get(self.db.sample_archive_program.remote())
+
+        evolve_block = extract_evolve_block(parent.code)
 
         coder_template = textwrap.dedent("""
             ### MISSION
@@ -644,36 +357,21 @@ class EvoWorker:
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to improve your code.
             - **Efficiency:** You have a maximum of 5 attempts.
-            - You must `run_experiment` before `log_experiment` for each hypothesis.                             
-            - **Safety:** 
-              - You may only modify code that lies below a line containing "EVOLVE-BLOCK-START" 
-                and above a line containing "EVOLVE-BLOCK-END". 
-                You must NOT remove or modify any code outside these tags.
-                You must NOT remove the tags themselves.                         
-              - Make sure your rewritten program maintains the same inputs and outputs as the original program, 
-                but with a novel internal implementation.
-              - Make sure the file still runs after your changes.                        
-
+        
             ### COMPLETION
-            - If you achieve `new_score > {score}`, submit your improved program using `submit_tool`.
-            - If you cannot beat the score after 5 distinct hypotheses, give up and offer an explanation why.
+            - As soon as you achieve a score greater than {score}, submit your improved program using `submit_tool`.
+            - If you cannot beat the of the above code after 5 distinct hypotheses, give up and offer an explanation why.
          """)
 
         coder_prompt = coder_template.format(lang=self.evo_config.language, 
-                                             code=elite_parent.code, 
-                                             score=elite_parent.combined_score)
-
-        model = GoogleModel('gemini-2.5-flash')
-        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+                                             code=evolve_block.inner_content, 
+                                             score=parent.combined_score)
 
         def submit_tool(ctx: RunContext[ClimbContext], program: str) -> None:
             """Call this tool to submit your improved program when you have achieved a higher score."""
-            program = normalize_llm_program(program)
-            res = verify_evolve_block(ctx.deps.parent_code, program)
-            if not res.ok:
-                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
-            
-            Path(exec_fname).write_text(program, "utf-8")
+
+            evo_program = ctx.deps.evolve_block.reconstruct(program)
+            Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
@@ -686,9 +384,9 @@ class EvoWorker:
                         # Add the program to the database
                         db_program = Program(
                             id=str(uuid.uuid4()),
-                            code=program,
+                            code=evo_program,
                             language=self.evo_config.language,
-                            parent_id=elite_parent.id,
+                            parent_id=parent.id,
                             generation=current_gen,
                             code_diff="agent_climb",
                             embedding=[],
@@ -698,14 +396,17 @@ class EvoWorker:
                         ray.get(self.db.add.remote(db_program))
                     else:
                         clear_results_dir(results_dir)
-                        raise ModelRetry("Improved program did not achieve a higher score upon re-evaluation.")
+                        raise ModelRetry("Improved program did not achieve a higher score on re-evaluation.")
                 else:
                     clear_results_dir(results_dir)
-                    raise ModelRetry("Improved program did not return a score upon re-evaluation.")
+                    raise ModelRetry("Improved program did not return a score on re-evaluation.")
             else:
                 clear_results_dir(results_dir)
-                raise ModelRetry("Improved program was not correct upon re-evaluation.")
-            
+                raise ModelRetry("Improved program was not correct on re-evaluation.")
+
+        model = GoogleModel('gemini-2.5-flash')
+        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+
         evo_coder = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
@@ -721,13 +422,7 @@ class EvoWorker:
             Provide a string with the hypothesis you are testing with this program.
             """
 
-            # If code outside of the evo block is changed, raise ModelRetry
-            program = normalize_llm_program(program)
-            res = verify_evolve_block(ctx.deps.parent_code, program)
-            if not res.ok:
-                raise ModelRetry(llm_fix_instructions(ctx.deps.parent_code, program, res))
-            
-            Path(exec_fname).write_text(program, "utf-8")
+            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
@@ -758,14 +453,13 @@ class EvoWorker:
             clear_results_dir(results_dir)
             return out_str
 
-
-        #debugpy.listen(5678)
-        #debugpy.wait_for_client()
-        #debugpy.breakpoint()        
         try:
+            #debugpy.listen(5678)
+            #debugpy.wait_for_client()
+            #debugpy.breakpoint()
             evo_coder.run_sync(coder_prompt, 
-                               deps=ClimbContext(parent_code=normalize_llm_program(elite_parent.code), 
-                                                 parent_score=elite_parent.combined_score))
+                               deps=ClimbContext(evolve_block=evolve_block, 
+                                                 parent_score=parent.combined_score))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 

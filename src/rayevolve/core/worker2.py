@@ -218,14 +218,6 @@ class EvoWorker:
             verbose=verbose,
         )
 
-        if evo_config.embedding_model is not None:
-            self.embedding = EmbeddingClient(
-                model_name=evo_config.embedding_model,
-                verbose=verbose,
-            )
-        else:
-            self.embedding = None
-
         # Initialize rich console for formatted output
         self.console = Console()
 
@@ -250,16 +242,8 @@ class EvoWorker:
         #debugpy.breakpoint()                     
         while True:
             current_gen = ray.get(self.gen.next.remote())
-            self.agent_driftaway(current_gen)
-            # self.run_strategy(current_gen)
-            #if random.random() < 0.5:
-            #    self.agent_driftaway(current_gen)
-            #else:
-            #    if random.random() < 0.5:
-            #        self.agent_climb(current_gen)
-            #    else:
-            #        self.agent_climb_or_drift(current_gen, drift_up=True)
-
+            self.run_strategy(current_gen)
+            
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
 
@@ -286,10 +270,11 @@ class EvoWorker:
             - Focuses on rigorously exploiting the current best solutions to achieve further, direct score improvements.
             2. **DRIFT UP (Exploit):** Best when velocity is slow.
             - Targets non-elite parents with potential, seeking to improve them and discover adjacent, potentially higher, peaks.
-            3. **DRIFT AWAY (Explore):** Best when stuck short term.
-            - Ignores score improvement. Tries to gradually change the approach while maintaining correctness, to escape local optima.
+            3. **DRIFT AWAY (Explore):** Best when stuck short term and introduces diversity.
+            - Ignores score improvement. Selects any program and modifies it substantially to explore new areas of the solution space.
             4. **JUMP (Explore):** Best when stuck long term.
-            - Generates fresh approaches that differ from current set of elites to explore new areas of the solution space.
+            - Ignores the score improvement. Generates fresh approaches are significantly different from an elite program, while maintining correctness
+              to explore new areas of the solution space when the system is stuck.
         """)
         prompt = template.format(best_score_table=best_score_table)
         # Instructions for output format might not be necessary.
@@ -308,6 +293,7 @@ class EvoWorker:
         probs: StrategyProbs = result.output
 
         weights = probs.as_normalized_weights()
+        print(weights)
 
         # Map strategy names to the corresponding coroutine functions
         strategy_funcs = {
@@ -329,8 +315,6 @@ class EvoWorker:
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
-        
-        print("Current Generation:", current_gen)
 
         if drift_up:
             # Sample from non-elite programs for drift up.
@@ -473,19 +457,17 @@ class EvoWorker:
                                                  parent_score=parent.combined_score))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
-
-    def agent_climb(self, current_gen: int):
-        return self.agent_climb_or_drift(current_gen, drift_up=False)
     
-    def agent_driftup(self, current_gen: int):
-        return self.agent_climb_or_drift(current_gen, drift_up=True)
-    
-    def agent_driftaway(self, current_gen: int):             
+    def agent_driftaway_jump(self, current_gen: int, jump=False):             
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        parent = ray.get(self.db.sample_all_programs.remote(3))
+        if jump:
+            parent = ray.get(self.db.sample_archive_program.remote(3))
+        else:
+            parent = ray.get(self.db.sample_all_programs.remote(10))
+
         evolve_block = extract_evolve_block(parent.code)
 
         coder_template = textwrap.dedent("""
@@ -502,7 +484,7 @@ class EvoWorker:
                                          
             ### PROTOCOL
             You must propose a different solution and determine it is correct. You can submit 
-            your solution to `check_correctness` with the change type you made and get feedback.
+            your solution to `check_novelty_and_correctness` with the change type you made and get feedback.
              
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to help you identify a novel approach.
@@ -715,32 +697,15 @@ class EvoWorker:
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 
+    def agent_climb(self, current_gen: int):
+        return self.agent_climb_or_drift(current_gen, drift_up=False)
+    
+    def agent_driftup(self, current_gen: int):
+        return self.agent_climb_or_drift(current_gen, drift_up=True)
+    
+    def agent_driftaway(self, current_gen: int):
+        return self.agent_driftaway_jump(current_gen, jump=False)
+    
     def agent_jump(self, current_gen: int):
-        pass
+        return self.agent_driftaway_jump(current_gen, jump=True)
 
-
-    def get_code_embedding(self, exec_fname: str) -> tuple[List[float], float]:
-        """Get the embedding of the code."""
-        try:
-            evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
-        except Exception as e:
-            evaluated_code = ""
-        if evaluated_code != "":
-            # Get the embedding of the initial program
-            try:
-                if self.embedding is not None:
-                    redacted_code = redact_immutable(evaluated_code, no_state=True)
-                    embedding_result, e_cost = self.embedding.get_embedding(
-                        redacted_code
-                    )
-                else:
-                    embedding_result = []
-                    e_cost = 0.0
-                code_embedding = cast(List[float], embedding_result)
-            except Exception as e:
-                code_embedding = []
-                e_cost = 0.0
-        else:
-            code_embedding = []
-            e_cost = 0.0
-        return code_embedding, e_cost

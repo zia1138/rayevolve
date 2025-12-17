@@ -2149,7 +2149,7 @@ class ProgramDatabase:
         history_lines = ["Time\tBest Score"] # Header row
         for row in raw_history:
             timestamp = int(round(row["timestamp"], 0)) # Round timestamp to integer
-            score = round(row["combined_score"], 3) # Round score to 3 decimal places
+            score = row["combined_score"] # Round score to 3 decimal places
             if score > best_score_so_far:
                 best_score_so_far = score
             # Append tab-delimited row

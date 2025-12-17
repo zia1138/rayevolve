@@ -264,6 +264,11 @@ class EvoWorker:
             - Compare the current rate of improvement (or lack thereof) to previous periods of successful increase in the best score.
             - Determine if the current trend is significantly slower or has completely flattened compared to historical bests. 
               This establishes whether true stagnation or just slower growth is occurring.
+            3. Analyze Phase & Expectations:
+               Early Phase: Large jumps are expected. Small jumps count as "Slow."
+               Late Phase (High Score): Improvements naturally become tiny and rare. DO NOT mistake this for stagnation.
+               Rule: If the score is very high, even a micro-improvement 
+               counts as "High Velocity" and justifies CLIMB. Only switch to DRIFT/JUMP if the score is flat for a long time.
 
             ### STRATEGY DEFINITIONS
             1. **CLIMB (Exploit):** Best when velocity is high and the score is improving.
@@ -288,7 +293,7 @@ class EvoWorker:
             - "jump": float
         """
 
-        evo_strategist = Agent("google-gla:gemini-2.5-pro", output_type=StrategyProbs)
+        evo_strategist = Agent("google-gla:gemini-2.5-pro", system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
         result = evo_strategist.run_sync(prompt)
         probs: StrategyProbs = result.output
 
@@ -318,9 +323,11 @@ class EvoWorker:
 
         if drift_up:
             # Sample from non-elite programs for drift up.
-            parent = ray.get(self.db.sample_all_programs.remote(10))
+            parent = ray.get(self.db.sample_all_programs.remote(0))
+            print(f"Drift Up: {parent.combined_score}")
         else:        
             parent = ray.get(self.db.sample_archive_program.remote(3))
+            print(f"Climb: {parent.combined_score}")
 
         evolve_block = extract_evolve_block(parent.code)
 
@@ -465,8 +472,10 @@ class EvoWorker:
 
         if jump:
             parent = ray.get(self.db.sample_archive_program.remote(3))
+            print(f"Jump: {parent.combined_score}")
         else:
-            parent = ray.get(self.db.sample_all_programs.remote(10))
+            parent = ray.get(self.db.sample_all_programs.remote(0))
+            print(f"Drift Away: {parent.combined_score}")
 
         evolve_block = extract_evolve_block(parent.code)
 

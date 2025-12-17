@@ -2153,7 +2153,7 @@ class ProgramDatabase:
             if score > best_score_so_far:
                 best_score_so_far = score
             # Append tab-delimited row
-            history_lines.append(f"{timestamp}\t{score:.3f}")
+            history_lines.append(f"{timestamp}\t{best_score_so_far}")
 
         # Join all rows with newlines
         return "\n".join(history_lines)

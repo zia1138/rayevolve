@@ -882,6 +882,7 @@ class ProgramDatabase:
         # TODO: This get call is redundant, we already have the program.
         return self.get(pid)
 
+    @db_retry()
     def sample_all_programs(self, alpha) -> Optional[Program]:
         """Sample from all correct programs using power-law distribution."""
         if not self.cursor:
@@ -904,6 +905,41 @@ class ProgramDatabase:
         sampled_idx = sample_with_powerlaw(correct_programs, alpha)
         selected_prog = correct_programs[sampled_idx]
         return selected_prog
+
+    @db_retry()
+    def sample_all_topK(self, topK: int) -> Optional[Program]:
+        """Sample uniformly at random from the top-K correct programs (by combined_score)."""
+        if not self.cursor:
+            raise ConnectionError("DB not connected.")
+        if topK <= 0:
+            return None
+
+        self.cursor.execute(
+            """
+            SELECT p.id
+            FROM programs p
+            WHERE p.correct = 1 AND p.combined_score IS NOT NULL
+            ORDER BY p.combined_score DESC
+            LIMIT ?
+            """,
+            (topK,),
+        )
+        rows = self.cursor.fetchall()
+        if not rows:
+            return None
+
+        top_ids = [row["id"] for row in rows]
+
+        top_programs: List[Program] = []
+        for pid in top_ids:
+            prog = self.get(pid)
+            if prog:
+                top_programs.append(prog)
+
+        if not top_programs:
+            return None
+
+        return random.choice(top_programs)    
 
     @db_retry()
     def sample(

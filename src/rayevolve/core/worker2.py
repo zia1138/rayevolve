@@ -218,9 +218,6 @@ class EvoWorker:
             verbose=verbose,
         )
 
-        # Initialize rich console for formatted output
-        self.console = Console()
-
         if self.evo_config.language == "cuda":
             self.lang_ext = "cu"
         elif self.evo_config.language == "cpp":
@@ -316,7 +313,7 @@ class EvoWorker:
 
         return strategy_funcs[chosen_name](current_gen)
 
-    def agent_climb_or_drift(self, current_gen: int, drift_up: bool = False):
+    def agent_climb_or_drift(self, current_gen: int):
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
@@ -386,21 +383,20 @@ class EvoWorker:
                             language=self.evo_config.language,
                             parent_id=parent.id,
                             generation=current_gen,
-                            code_diff="agent_climb",
-                            embedding=[],
+                            code_diff="explore",
                             correct=True,
                             combined_score=combined,
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:
                         clear_results_dir(results_dir)
-                        raise ModelRetry("Improved program did not achieve a higher score on re-evaluation.")
+                        raise ModelRetry("Improved program did not achieve a higher score on submission.")
                 else:
                     clear_results_dir(results_dir)
-                    raise ModelRetry("Improved program did not return a score on re-evaluation.")
+                    raise ModelRetry("Improved program did not return a score on submission.")
             else:
                 clear_results_dir(results_dir)
-                raise ModelRetry("Improved program was not correct on re-evaluation.")
+                raise ModelRetry("Improved program was not correct on submission.")
 
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
@@ -482,7 +478,7 @@ class EvoWorker:
         coder_template = textwrap.dedent("""
             ### MISSION
             The code is below. Your goal is to produce a dramatically different solution that still works correctly.   
-            You should make many different types of substantive changes including algorithmic, changes to
+            You should make many different types of substantive changes including conceptual, algorithmic, changes to
             modularization, data flow, control flow, or architectural patterns, or changes in parameters
             and parameterization.                                                                  
            
@@ -523,7 +519,7 @@ class EvoWorker:
             Args:
                 parent_code: The source code of the parent program.
                 novel_code: The source code of the proposed novel program.
-                change_type: A detailed description of the modification made (e.g., algorithmic change,
+                change_type: A detailed description of the modification made (e.g. conceptual, algorithmic change,
                     refactoring, control-flow alteration, etc.).
 
             Returns:
@@ -545,7 +541,7 @@ class EvoWorker:
             Verify that the the following change type was made:
             {change_type} 
             Return `VerifiedChange` if the change described above was made to the code.
-            Return `ChangeNotVerified` if the program is not substantially different from the parent, explain why.
+            Return `ChangeNotVerified` if the change described above was not made or cannot be confirmed, explain why.
             """)
             change_prompt = change_template.format(parent_code=parent_code,
                                               proposed_program=novel_code,
@@ -563,7 +559,6 @@ class EvoWorker:
                 novel_code: Source code of the proposed novel program to evaluate.
 
             Returns:
-                A structured verdict produced by `evo_diff`:
                 - VerifiedChangeAndNovel: The program exhibits substantial, meaningful differences.
                 - NotNovel: The program is not sufficiently different, with reasoning.
             """            
@@ -577,7 +572,7 @@ class EvoWorker:
             ```{lang}
             {proposed_program}
             ```
-            Does the new program have substantial changes including algorithmic, changes to
+            Does the new program have substantial changes including conceptual, algorithmic, changes to
             modularization, data flow, control flow, or architectural patterns, or changes in parameters and parameterization.   
             from the parent program? Your bar should be high for what constitutes a substantial change.
             Return `NovelProgram` if the program is substantially different from the parent.
@@ -595,8 +590,8 @@ class EvoWorker:
             Args:
                 novel_program: A novel program that is dramatically different from the parent that 
                     still functions correctly.
-                change_type: A detailed description of the modification made (e.g., algorithmic change,
-                    refactoring, control-flow alteration, etc.).                
+                change_type: A detailed description of the modification made (e.g. , conceptual, algorithmic change,
+                    refactoring, control-flow alteration, etc.). 
             """
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             Path(exec_fname).write_text(evo_program, "utf-8")
@@ -612,10 +607,10 @@ class EvoWorker:
                     novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
                     raise_str = ""
                     if isinstance(confirmation, ChangeNotVerified):
-                        raise_str += "The change type could not be verified on re-evaluation. Here is the reason:\n"
+                        raise_str += "The change type could not be verified on submission. Here is the reason:\n"
                         raise_str += confirmation.reasoning + "\n"
                     if isinstance(novelty, NotNovel):
-                        raise_str += "The program is not substantially different from the parent program on re-evaluation. Here is the reason:\n"
+                        raise_str += "The program is not substantially different from the parent program on submission. Here is the reason:\n"
                         raise_str += novelty.reasoning + "\n"
                     if raise_str != "":
                         clear_results_dir(results_dir)
@@ -636,10 +631,10 @@ class EvoWorker:
                     ray.get(self.db.add.remote(db_program))
                 else:
                     clear_results_dir(results_dir)
-                    raise ModelRetry("Novel program did not return a score upon re-evaluation.")
+                    raise ModelRetry("Novel program did not return a score on submission.")
             else:
                 clear_results_dir(results_dir)
-                raise ModelRetry("Novel program was not correct upon re-evaluation.")
+                raise ModelRetry("Novel program was not correct on submission.")
 
         evo_coder = Agent(
             model,
@@ -706,15 +701,4 @@ class EvoWorker:
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 
-    def agent_climb(self, current_gen: int):
-        return self.agent_climb_or_drift(current_gen, drift_up=False)
-    
-    def agent_driftup(self, current_gen: int):
-        return self.agent_climb_or_drift(current_gen, drift_up=True)
-    
-    def agent_driftaway(self, current_gen: int):
-        return self.agent_driftaway_jump(current_gen, jump=False)
-    
-    def agent_jump(self, current_gen: int):
-        return self.agent_driftaway_jump(current_gen, jump=True)
 

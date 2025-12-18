@@ -48,30 +48,31 @@ logger = logging.getLogger(__name__)
 
 
 class StrategyProbs(BaseModel):
-    """Probabilities for each evolutionary strategy."""
-    climb: float = Field(..., description="Probability of choosing the climb strategy", ge=0)
-    drift_up: float = Field(..., description="Probability of choosing the drift up strategy", ge=0)
-    drift_away: float = Field(..., description="Probability of choosing the drift away strategy", ge=0)
-    jump: float = Field(..., description="Probability of choosing the jump strategy", ge=0)
-    reasoning: str = Field(..., description="A short sentence explaining the reasoning behind the chosen probabilities.")
+    """
+    Probabilities and top-K pool size (beam width) for each evolutionary strategy. 
+    exploit_weight and explore_weight must sum to 1. Keep exploit at a minimum of 0.3 to ensure steady progress.  
+    """
+    exploit_weight: float = Field(description="Probability [0.3 - 1.0]. Goal: Improve Score.")
+    explore_weight: float = Field(description="Probability [0.0 - 0.7]. Goal: Novelty/Difference.")
+    exploit_top_k: int = Field(description="[1 - 50] Low=Focus (Rise), High=Catch (Stagnation). Parent pool size for Exploitation (Score Improvement).")
+    explore_top_k: int = Field(description="[1 - 50] Low=Focus (Rise), High=Catch (Stagnation). Parent pool size for Exploration (Novelty).")
+    reasoning: str = Field(description="Analyze the trend velocity. Explain your beam width adjustments based on the 'Catch the Mutants' philosophy.")
     def as_normalized_weights(self) -> dict[str, float]:
         """Return a dict of normalized probabilities that sums to 1."""
         weights = {
-            "climb": self.climb,
-            "drift_up": self.drift_up,
-            "drift_away": self.drift_away,
-            "jump": self.jump,
+            "exploit_weight": self.exploit_weight,
+            "explore_weight": self.explore_weight,
         }
         total = sum(weights.values())
         if total <= 0:
             raise ValueError("All probabilities are zero or negative")
         return {k: v / total for k, v in weights.items()}
 
-class ClimbContext(BaseModel):
+class ExploitContext(BaseModel):
     evolve_block: EvolveBlock
     parent_score: float
 
-class DriftAwayContext(BaseModel):
+class ExploreContext(BaseModel):
     evolve_block: EvolveBlock
 
 class VerifiedChange(BaseModel):
@@ -245,90 +246,73 @@ class EvoWorker:
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
 
         template = textwrap.dedent("""
-            You are the strategic supervisor for an evolutionary code optimization system.
-            Your job is to set the probability distribution for the next worker based on the current progress trend.
+        You are the Strategic Supervisor for an evolutionary optimization process.
+        Your job is to tune the **Search Distribution** (Exploit vs. Explore) and **Beam Width** (Top-K) to match the current difficulty of the fitness landscape.
 
-            ### CURRENT STATUS (Best Score History)
-            {best_score_table}
+        ### THE PHILOSOPHY: "Catch the Mutants"
+        1.  **Exploration creates Potential:** Structural changes (`explore`) often lower the score initially.
+        2.  **Exploitation harvests Potential:** To find a new peak, we must polish these "ugly ducklings."
+        3.  **Therefore:** When we increase Exploration, we must **simultaneously Widen the Exploitation Beam** (`exploit_top_k`) to ensure these new, lower-scoring candidates are selected for improvement.
 
-            "Time" is seconds since the epoch and "Best Score" is on an arbitrary scale where higher is better.
+        ### CURRENT STATUS (Best Score History)
+        {best_score_table}
 
-            ### ANALYSIS RULES (Focus on the most recent entries in the table)
-            1. **Analyze Velocity:** Is the best score rising quickly, slowly, or flatlining?
-            2. **Analyze Stagnation:**
-            - If it is early in the simulation, stagnation cannot be definitively detected. Prioritize climbing until 
-              there is evidence of stagnation.                      
-            - Compare the current rate of improvement (or lack thereof) to previous periods of successful increase in the best score.
-            - Determine if the current trend is significantly slower or has completely flattened compared to historical bests. 
-              This establishes whether true stagnation or just slower growth is occurring.
-            3. Analyze Phase & Expectations:
-               Early Phase: Large jumps are expected. Small jumps count as "Slow."
-               Late Phase (High Score): Improvements naturally become tiny and rare. DO NOT mistake this for stagnation.
-               Rule: If the score is very high, even a micro-improvement 
-               counts as "High Velocity" and justifies CLIMB. Only switch to DRIFT/JUMP if the score is flat for a long time.
+        ### DYNAMIC CONTROL RULES
 
-            ### STRATEGY DEFINITIONS
-            1. **CLIMB (Exploit):** Best when velocity is high and the score is improving.
-            - Focuses on rigorously exploiting the current best solutions to achieve further, direct score improvements.
-            2. **DRIFT UP (Exploit):** Best when velocity is slow.
-            - Targets non-elite parents with potential, seeking to improve them and discover adjacent, potentially higher, peaks.
-            3. **DRIFT AWAY (Explore):** Best when stuck short term and introduces diversity.
-            - Ignores score improvement. Selects any program and modifies it substantially to explore new areas of the solution space.
-            4. **JUMP (Explore):** Best when stuck long term.
-            - Ignores the score improvement. Generates fresh approaches are significantly different from an elite program, while maintining correctness
-              to explore new areas of the solution space when the system is stuck.
+        **1. BREAKOUT (The Snap)**
+        - **Signal:** A significant new best score appears after a flatline.
+        - **Action:** **SNAP THE BEAM SHUT.**
+        - **Reasoning:** The "Wide Net" worked. We caught a winner. Now drop everything and optimize *only* that winner.
+        - **Settings:** `exploit_weight=1.0`, `exploit_top_k=1`, `explore_weight=0.0`.
+
+        **2. RISING PHASE (High Velocity)**
+        - **Signal:** Frequent improvements.
+        - **Action:** **NARROW FOCUS.**
+        - **Settings:** `exploit_weight=0.9`, `exploit_top_k=1-3`. Ride the rocket.
+
+        **3. GRINDING PHASE (Decaying Velocity)**
+        - **Signal:** Improvement rate is slowing down.
+        - **Action:** **BROADEN THE BEAM.**
+        - **Settings:** `exploit_weight=0.8`, `exploit_top_k=10-20`. Check the neighbors.
+
+        **4. STAGNATION PHASE (Flatline)**
+        - **Signal:** Zero improvement for a long time.
+        - **Action:** **THE "WIDE NET" MANEUVER.**
+        - **Settings: (for example) **
+            - `explore_weight`: **High** (0.6). Aggressively generate structural mutants.
+            - `exploit_top_k`: **50**. **CRITICAL:** Widen the exploit beam  to catch and polish the new mutants.
+            - `explore_top_k`: **1-5**. Force the Elites to mutate (Novel Elite).
+                                        
         """)
         prompt = template.format(best_score_table=best_score_table)
-        # Instructions for output format might not be necessary.
-        """
-            ### OUTPUT
-            Return a JSON object with these keys. Ensure values sum to 1.0.
-            - "reasoning": "A concise sentence explaining your strategic decision based on the historical data analysis."
-            - "climb": float
-            - "drift_up": float
-            - "drift_away": float
-            - "jump": float
-        """
 
         evo_strategist = Agent("google-gla:gemini-2.5-pro", system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
         result = evo_strategist.run_sync(prompt)
         probs: StrategyProbs = result.output
 
         weights = probs.as_normalized_weights()
-        print(weights)
-
-        # Map strategy names to the corresponding coroutine functions
-        strategy_funcs = {
-            "climb": self.agent_climb,
-            "drift_up": self.agent_driftup,
-            "drift_away": self.agent_driftaway,
-            "jump": self.agent_jump,
-        }
-
-        chosen_name = random.choices(
-            population=list(strategy_funcs.keys()),
-            weights=[weights[name] for name in strategy_funcs.keys()],
+        mode = random.choices(
+            ["exploit", "explore"],
+            weights=[weights["exploit_weight"], weights["explore_weight"]],
             k=1,
         )[0]
 
-        return strategy_funcs[chosen_name](current_gen)
+        if mode == "exploit":
+            self.agent_exploit(current_gen, probs.exploit_top_k)
+        else:
+            self.agent_explore(current_gen, probs.explore_top_k)
 
-    def agent_climb_or_drift(self, current_gen: int):
+
+    def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        if drift_up:
-            # Sample from non-elite programs for drift up.
-            parent = ray.get(self.db.sample_all_programs.remote(0))
-            print(f"Drift Up: {parent.combined_score}")
-        else:        
-            parent = ray.get(self.db.sample_archive_program.remote(3))
-            print(f"Climb: {parent.combined_score}")
-
+        parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
+    
         evolve_block = extract_evolve_block(parent.code)
 
-        coder_template = textwrap.dedent("""
+        exploit_template = textwrap.dedent("""
             ### MISSION
             The code below has achieved a score of **{score}**. Your goal is to beat this score.
            
@@ -355,11 +339,11 @@ class EvoWorker:
             - If you cannot beat the of the above code after 5 distinct hypotheses, give up and offer an explanation why.
          """)
 
-        coder_prompt = coder_template.format(lang=self.evo_config.language, 
-                                             code=evolve_block.inner_content, 
-                                             score=parent.combined_score)
+        exploit_prompt = exploit_template.format(lang=self.evo_config.language, 
+                                                code=evolve_block.inner_content, 
+                                                score=parent.combined_score)
 
-        def submit_tool(ctx: RunContext[ClimbContext], program: str) -> None:
+        def submit_tool(ctx: RunContext[ExploitContext], program: str) -> None:
             """
             Submit an improved program when you achieve a higher score relative to the parent program.
             Args:
@@ -401,16 +385,16 @@ class EvoWorker:
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
-        evo_coder = Agent(
+        evo_exploit = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
-            deps_type=ClimbContext,
+            deps_type=ExploitContext,
             output_type=[str, submit_tool],
             retries=3,            
             model_settings=settings)
 
-        @evo_coder.tool(retries = 3)
-        def run_experiment(ctx: RunContext[ClimbContext], program: str, hypothesis: str) -> str:
+        @evo_exploit.tool(retries = 3)
+        def run_experiment(ctx: RunContext[ExploitContext], program: str, hypothesis: str) -> str:
             """
             Call this tool with a novel program that you want to evaluate. It will return
             the results of executing the program including its score and correctness.
@@ -455,27 +439,22 @@ class EvoWorker:
             #debugpy.listen(5678)
             #debugpy.wait_for_client()
             #debugpy.breakpoint()
-            evo_coder.run_sync(coder_prompt, 
-                               deps=ClimbContext(evolve_block=evolve_block, 
+            evo_exploit.run_sync(exploit_prompt, 
+                               deps=ExploitContext(evolve_block=evolve_block, 
                                                  parent_score=parent.combined_score))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
     
-    def agent_driftaway_jump(self, current_gen: int, jump=False):             
+    def agent_explore(self, current_gen: int, parent_selection_top_k: int):             
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        if jump:
-            parent = ray.get(self.db.sample_archive_program.remote(3))
-            print(f"Jump: {parent.combined_score}")
-        else:
-            parent = ray.get(self.db.sample_all_programs.remote(0))
-            print(f"Drift Away: {parent.combined_score}")
+        parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
 
         evolve_block = extract_evolve_block(parent.code)
 
-        coder_template = textwrap.dedent("""
+        explore_template = textwrap.dedent("""
             ### MISSION
             The code is below. Your goal is to produce a dramatically different solution that still works correctly.   
             You should make many different types of substantive changes including conceptual, algorithmic, changes to
@@ -503,7 +482,7 @@ class EvoWorker:
             - If you cannot find a correct and novel program after 5 attempts explain why and give up.
          """)
 
-        coder_prompt = coder_template.format(lang=self.evo_config.language, 
+        explore_prompt = explore_template.format(lang=self.evo_config.language, 
                                              code=evolve_block.inner_content)
 
         model = GoogleModel('gemini-2.5-flash')
@@ -584,7 +563,7 @@ class EvoWorker:
             r = await evo_diff.run(diff_prompt)
             return r.output
 
-        async def submit_novel(ctx: RunContext[DriftAwayContext], novel_program: str, change_type: str) -> None:
+        async def submit_novel(ctx: RunContext[ExploreContext], novel_program: str, change_type: str) -> None:
             """
             Submit a proposed novel program.
             Args:
@@ -636,16 +615,16 @@ class EvoWorker:
                 clear_results_dir(results_dir)
                 raise ModelRetry("Novel program was not correct on submission.")
 
-        evo_coder = Agent(
+        evo_explore = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
-            deps_type=DriftAwayContext,
+            deps_type=ExploreContext,
             output_type=[str, submit_novel],
             retries=3,
             model_settings=settings)
 
-        @evo_coder.tool(retries = 3)
-        async def check_novelty_and_correctness(ctx: RunContext[DriftAwayContext], novel_program: str, change_type:str) -> str:
+        @evo_explore.tool(retries = 3)
+        async def check_novelty_and_correctness(ctx: RunContext[ExploreContext], novel_program: str, change_type:str) -> str:
             """
             Evaluate a proposed inner block for correctness and verify the described change type.
 
@@ -697,7 +676,7 @@ class EvoWorker:
             return out_str
 
         try:
-            evo_coder.run_sync(coder_prompt, deps=DriftAwayContext(evolve_block=evolve_block))
+            evo_explore.run_sync(explore_prompt, deps=ExploreContext(evolve_block=evolve_block))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 

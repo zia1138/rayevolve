@@ -942,6 +942,13 @@ class ProgramDatabase:
         return random.choice(top_programs)    
 
     @db_retry()
+    def total_programs(self) -> int:
+        if not self.cursor:
+            return 0
+        self.cursor.execute("SELECT COUNT(*) FROM programs")
+        return (self.cursor.fetchone() or {"COUNT(*)": 0})["COUNT(*)"]
+
+    @db_retry()
     def sample(
         self,
         target_generation=None,

@@ -54,8 +54,8 @@ class StrategyProbs(BaseModel):
     """
     exploit_weight: float = Field(description="Probability [0.3 - 1.0]. Goal: Improve Score.")
     explore_weight: float = Field(description="Probability [0.0 - 0.7]. Goal: Novelty/Difference.")
-    exploit_top_k: int = Field(description="[1 - 50] Low=Focus (Rise), High=Catch (Stagnation). Parent pool size for Exploitation (Score Improvement).")
-    explore_top_k: int = Field(description="[1 - 50] Low=Focus (Rise), High=Catch (Stagnation). Parent pool size for Exploration (Novelty).")
+    exploit_top_k: int = Field(description="Beam width for Exploitation")
+    explore_top_k: int = Field(description="Beam width for Exploration")
     reasoning: str = Field(description="Analyze the trend velocity. Explain your beam width adjustments based on the 'Catch the Mutants' philosophy.")
     def as_normalized_weights(self) -> dict[str, float]:
         """Return a dict of normalized probabilities that sums to 1."""
@@ -247,46 +247,58 @@ class EvoWorker:
 
         template = textwrap.dedent("""
         You are the Strategic Supervisor for an evolutionary optimization process.
-        Your job is to tune the **Search Distribution** (Exploit vs. Explore) and **Beam Width** (Top-K) to match the current difficulty of the fitness landscape.
+        Your job is to tune the **Search Distribution** (Exploit vs. Explore) and **Beam Width** (Top-K) to match the current difficulty of the fitness landscape and the available compute resources.
 
-        ### THE PHILOSOPHY: "Catch the Mutants"
-        1.  **Exploration creates Potential:** Structural changes (`explore`) often lower the score initially.
-        2.  **Exploitation harvests Potential:** To find a new peak, we must polish these "ugly ducklings."
-        3.  **Therefore:** When we increase Exploration, we must **simultaneously Widen the Exploitation Beam** (`exploit_top_k`) to ensure these new, lower-scoring candidates are selected for improvement.
-
-        ### CURRENT STATUS (Best Score History)
+        ### CURRENT STATUS
+        - **Active Workers:** {num_workers} (Bandwidth)
+        - **Total Programs:** {total_programs} (Population Depth)
+        - **Best Score History:**
         {best_score_table}
+
+        ### PHILOSOPHY: BEAM WIDTH & BANDWIDTH
+        Your `Top-K` settings control the **Focus Intensity** (Ratio of Workers to Parents).
+        1.  **Laser Focus (K=1):** All {num_workers} workers attack the same parent. Maximum depth, zero breadth.
+        2.  **Balanced (K ~= Workers):** Roughly one worker per parent. Efficient parallel search.
+        3.  **Wide Net (K > Workers):** Workers rotate through a large pool. Maximum breadth, low depth.
 
         ### DYNAMIC CONTROL RULES
 
         **1. BREAKOUT (The Snap)**
-        - **Signal:** A significant new best score appears after a flatline.
+        - **Signal:** A new best score appears after a plateau.
         - **Action:** **SNAP THE BEAM SHUT.**
-        - **Reasoning:** The "Wide Net" worked. We caught a winner. Now drop everything and optimize *only* that winner.
-        - **Settings:** `exploit_weight=1.0`, `exploit_top_k=1`, `explore_weight=0.0`.
+        - **Focus:** `exploit_top_k=1`.
+        - **Reasoning:** We found a winner. Focus 100% of our {num_workers} workers on optimizing this single program immediately.
 
         **2. RISING PHASE (High Velocity)**
         - **Signal:** Frequent improvements.
         - **Action:** **NARROW FOCUS.**
-        - **Settings:** `exploit_weight=0.9`, `exploit_top_k=1-3`. Ride the rocket.
+        - **Focus:** `exploit_top_k=1` to `exploit_top_k=max(1, int({num_workers} * 0.2))`. Keep intensity high.
 
         **3. GRINDING PHASE (Decaying Velocity)**
         - **Signal:** Improvement rate is slowing down.
-        - **Action:** **BROADEN THE BEAM.**
-        - **Settings:** `exploit_weight=0.8`, `exploit_top_k=10-20`. Check the neighbors.
+        - **Action:** **BROADEN THE BEAM (Balanced).**
+        - **Focus:** `exploit_top_k` should match `Active Workers` ({num_workers}).
+        - **Reasoning:** The easy wins are gone. Spread out the workforce to find which of the top {num_workers} parents has the easiest path forward.
 
         **4. STAGNATION PHASE (Flatline)**
         - **Signal:** Zero improvement for a long time.
         - **Action:** **THE "WIDE NET" MANEUVER.**
-        - **Settings: (for example) **
-            - `explore_weight`: **High** (0.6). Aggressively generate structural mutants.
-            - `exploit_top_k`: **50**. **CRITICAL:** Widen the exploit beam  to catch and polish the new mutants.
-            - `explore_top_k`: **1-5**. Force the Elites to mutate (Novel Elite).
-                                        
-        """)
-        prompt = template.format(best_score_table=best_score_table)
+        - **Settings:**
+            - **Weights:** Shift heavily to `explore_weight` (e.g., 0.7 Explore / 0.3 Exploit). **CRITICAL:** `exploit_weight` must be at least `0.3` to ensure continued refinement of promising candidates. `explore_weight` should be `1.0 - exploit_weight`.
+            - **Exploit K:** Widen `exploit_top_k` to `2 * {num_workers}` (capped by `Total Programs`).
+            - *Why:* We must cast a wide net to "Catch" and polish the new (lower-scoring) programs generated by the exploration workers.
+            - **Explore K:** Calibrate `explore_top_k` based on `Total Programs` and `Active Workers`.
+            - For general structural change: `explore_top_k` should be `min({total_programs}, 2 * {num_workers})` for a wide search.
+            - For radical architectural rewrite of elite code: `explore_top_k` should be `max(1, int({num_workers} * 0.1))` (small, focused pool of elites to radically refactor).
 
-        evo_strategist = Agent("google-gla:gemini-2.5-pro", system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
+        """)
+        num_workers = 10
+        total_programs = ray.get(self.db.total_programs.remote())
+        prompt = template.format(best_score_table=best_score_table, num_workers=num_workers, total_programs=total_programs)
+    
+        model = GoogleModel('gemini-2.5-pro')
+        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+        evo_strategist = Agent(model=model, settings=settings, system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
         result = evo_strategist.run_sync(prompt)
         probs: StrategyProbs = result.output
 
@@ -367,7 +379,7 @@ class EvoWorker:
                             language=self.evo_config.language,
                             parent_id=parent.id,
                             generation=current_gen,
-                            code_diff="explore",
+                            code_diff="agent_exploit",
                             correct=True,
                             combined_score=combined,
                         )
@@ -602,7 +614,7 @@ class EvoWorker:
                         language=self.evo_config.language,
                         parent_id=parent.id,
                         generation=current_gen,
-                        code_diff="agent_driftaway",
+                        code_diff="agent_explore",
                         embedding=[],
                         correct=True,
                         combined_score=combined,

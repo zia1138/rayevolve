@@ -56,6 +56,7 @@ class StrategyProbs(BaseModel):
     explore_weight: float = Field(description="Probability [0.0 - 0.7]. Goal: Novelty/Difference.")
     exploit_top_k: int = Field(description="Beam width for Exploitation")
     explore_top_k: int = Field(description="Beam width for Exploration")
+    explore_performance_floor: float = Field(description="Minimum relative score (0.0-1.0) to accept a novel program during exploration.")
     reasoning: str = Field(description="Analyze the trend velocity relative to historical difficulty. Explain your beam width adjustments based on the 'Catch the Mutants' philosophy.")
     def as_normalized_weights(self) -> dict[str, float]:
         """Return a dict of normalized probabilities that sums to 1."""
@@ -74,6 +75,7 @@ class ExploitContext(BaseModel):
 
 class ExploreContext(BaseModel):
     evolve_block: EvolveBlock
+    floor_score: float
 
 class VerifiedChange(BaseModel):
     """Use this when you can verify that the type of change provided was indeed made to the program."""
@@ -268,17 +270,20 @@ class EvoWorker:
         - **Action:** **SNAP THE BEAM SHUT.**
         - **Focus:** `exploit_top_k=1`.
         - **Reasoning:** We found a winner. Focus 100% of our {num_workers} workers on optimizing this single program immediately.
+        - **Explore Floor:** explore_performance_floor recommendation 0.95. High standards. Do not accept regressions during any exploration.                                   
 
         **2. RISING PHASE (High Velocity)**
         - **Signal:** Frequent improvements relative to throughput.
         - **Action:** **NARROW FOCUS.**
         - **Focus:** `exploit_top_k=1` to `exploit_top_k=max(1, int({num_workers} * 0.2))`. Keep intensity high.
-
+        - **Explore Floor:** explore_performance_floor recommendation 0.90. Maintain momentum.                                   
+                                   
         **3. GRINDING PHASE (Decaying Velocity)**
         - **Signal:** Score is flat, but the duration is **comparable** to previous successful climbing intervals.
         - **Action:** **BROADEN THE BEAM (Balanced).**
         - **Focus:** `exploit_top_k` should match `Active Workers` ({num_workers}).
         - **Reasoning:** Optimization is noisy. If it usually takes 100 attempts to find a gain, do not panic at 100 failures. Keep grinding.
+        - **Explore Floor:** explore_performance_floor recommendation 0.80. Allow moderate variance to find local improvements.                                   
 
         **4. STAGNATION PHASE (The Wall)**
         - **Signal:** Zero improvement for a duration **significantly longer** than historical norms.
@@ -287,9 +292,9 @@ class EvoWorker:
         - **Settings:**
             - **Exploit K:** Widen `exploit_top_k` to `2 * {num_workers}` (capped by `Total Programs`) to "Catch" mutants.
             - **Explore K:** Calibrate `explore_top_k` based on `Total Programs` and `Active Workers`.
+            - **Explore Floor:** Gradually drop explore_performance_floor to about 0.60. Desperate times. Allow significant temporary regressions to find new architectural hills.                        
             - For general structural change: `explore_top_k` should be `min({total_programs}, 2 * {num_workers})`.
             - For radical architectural rewrite of elite code: `explore_top_k` should be `max(1, int({num_workers} * 0.1))` (small, focused pool of elites).
-
         """)
         num_workers = 10
         total_programs = ray.get(self.db.total_programs.remote())
@@ -309,7 +314,7 @@ class EvoWorker:
         if mode == "exploit":
             self.agent_exploit(current_gen, probs.exploit_top_k)
         else:
-            self.agent_explore(current_gen, probs.explore_top_k)
+            self.agent_explore(current_gen, probs.explore_top_k, probs.explore_performance_floor)
 
 
     def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
@@ -318,7 +323,6 @@ class EvoWorker:
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
         parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
-    
         evolve_block = extract_evolve_block(parent.code)
 
         exploit_template = textwrap.dedent("""
@@ -332,13 +336,14 @@ class EvoWorker:
  
             ### PROTOCOL
             You must follow the **Scientific Method**:
-            1. **Analyze:** Use the code for inspiration and come up with an a hypothesis on how to improve the score.
-               It can be completely novel or a modification of the existing code.                     
-            2. **Experiment:** Write the code to implement your idea.
-            3. **Evaluate:** Use `run_experiment` to get the score.
+            1. **Analyze:** Analyze the code above and come up with an approach to improve the score.
+            2. **Innovate:** Focus on substantial algorithmic changes and rewrites that can lead to significant improvements.                            
+            3. **Experiment:** Write the code to implement your idea.
+               You are encouraged to add print statements to help you debug and understand the code behavior.
+            4. **Evaluate:** Use `run_experiment` to get any output and the score.
              
             ### CONSTRAINTS
-            - **Persistence:** Do not give up. Use the feedback to improve your code.
+            - **Persistence:** Do not give up. Use the feedback to identify new approaches for improvement.
             - **Efficiency:** You have a maximum of 5 attempts.
             - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
               but with an improved internal implementation.
@@ -352,6 +357,9 @@ class EvoWorker:
                                                 code=evolve_block.inner_content, 
                                                 score=parent.combined_score)
 
+        model = GoogleModel('gemini-2.5-flash')
+        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+
         def submit_tool(ctx: RunContext[ExploitContext], program: str) -> None:
             """
             Submit an improved program when you achieve a higher score relative to the parent program.
@@ -359,6 +367,7 @@ class EvoWorker:
                 program: Code for the program that achieved a higher score.
             """            
             evo_program = ctx.deps.evolve_block.reconstruct(program)
+
             Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
@@ -383,16 +392,14 @@ class EvoWorker:
                         ray.get(self.db.add.remote(db_program))
                     else:
                         clear_results_dir(results_dir)
-                        raise ModelRetry("Improved program did not achieve a higher score on submission.")
+                        raise ModelRetry("Improved program did not achieve a higher score on submission. Analyze why it failed and fix the issue.")
                 else:
                     clear_results_dir(results_dir)
-                    raise ModelRetry("Improved program did not return a score on submission.")
+                    raise ModelRetry("Improved program did not return a score on submission. Analyze why this happened and fix the issue.")
             else:
                 clear_results_dir(results_dir)
-                raise ModelRetry("Improved program was not correct on submission.")
+                raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue.")
 
-        model = GoogleModel('gemini-2.5-flash')
-        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
         evo_exploit = Agent(
             model,
@@ -403,17 +410,19 @@ class EvoWorker:
             model_settings=settings)
 
         @evo_exploit.tool(retries = 3)
-        def run_experiment(ctx: RunContext[ExploitContext], program: str, hypothesis: str) -> str:
+        def run_experiment(ctx: RunContext[ExploitContext], program: str, change: str) -> str:
             """
-            Call this tool with a novel program that you want to evaluate. It will return
-            the results of executing the program including its score and correctness.
+            Call this tool with an improved program that you want to evaluate. It will return
+            the results of executing the program including its score, correctness, and stdout.
             Args:
                 program: A program that you think will achieve a higher score.
-                hypothesis: A detailed description of the change being tested and why it should improve performance.
+                change: A detailed description of the change being tested and why it should improve performance.
             Returns:
                 str: A human-readable report of the results of the experiment.
             """
+            # Reconstruct the full program
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
+            # Run it.
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
@@ -426,13 +435,13 @@ class EvoWorker:
                 if combined is not None:
                     out_str += f"It achieved a score of {combined}\n"
                     if combined > ctx.deps.parent_score:
-                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
+                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. Learn from this success.\n"
                     else:
-                        out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}.\n"
+                        out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}. Analyze why it failed and propose a better approach.\n"
                 else:
-                    out_str += "Something happened and the score was not available in results.\n"
+                    out_str += "Something happened and the score was not available in results. Analyze why this happened and propose a fix.\n"
             else:
-                out_str += "The program did not execute correctly and did not produce a valid result.\n"
+                out_str += "The program did not execute correctly and did not produce a valid result. Analyze why this happened and propose a fix.\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
             out_str += "Here is the standard output of the program:\n"
@@ -445,16 +454,12 @@ class EvoWorker:
             return out_str
 
         try:
-            #debugpy.listen(5678)
-            #debugpy.wait_for_client()
-            #debugpy.breakpoint()
-            evo_exploit.run_sync(exploit_prompt, 
-                               deps=ExploitContext(evolve_block=evolve_block, 
-                                                 parent_score=parent.combined_score))
+            exploit_ctx = ExploitContext(evolve_block=evolve_block, parent_score=parent.combined_score)
+            evo_exploit.run_sync(exploit_prompt, deps=exploit_ctx)
         except Exception as e:
             print(f"Agent encountered an error: {e}")
     
-    def agent_explore(self, current_gen: int, parent_selection_top_k: int):             
+    def agent_explore(self, current_gen: int, parent_selection_top_k: int, explore_performance_floor: float):            
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
@@ -462,13 +467,15 @@ class EvoWorker:
         parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
 
         evolve_block = extract_evolve_block(parent.code)
-
+        floor_score = parent.combined_score * explore_performance_floor
         explore_template = textwrap.dedent("""
             ### MISSION
-            The code is below. Your goal is to produce a dramatically different solution that still works correctly.   
-            You should make many different types of substantive changes including conceptual, algorithmic, changes to
+            The code below has achieved a score of **{score}**. 
+            Your goal is to produce a dramatically different solution that still works correctly and
+            achieves a score of **greater than {floor_score}**.
+            You should consider different types of substantive changes including conceptual, algorithmic, changes to
             modularization, data flow, control flow, or architectural patterns, or changes in parameters
-            and parameterization.                                                                  
+            and parameterization, 
            
             ### CODE
             ```{lang}                             
@@ -484,37 +491,38 @@ class EvoWorker:
             - **Efficiency:** You have a maximum of 5 attempts.
             - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
               but with a completely novel internal implementation.
-                                                      
+                                           
             ### COMPLETION
-            - As soon as the change type was verified and the program is substantially different from the parent, 
-              use the submit_novel tool to submit your novel program.
-            - If you cannot find a correct and novel program after 5 attempts explain why and give up.
+            - As soon as the change type was verified, the program is substantially different from the parent
+              and achieves a score greater than {floor_score}, use the submit_novel tool to submit your novel program.
+            - If you cannot find a correct, novel program that achieves the minimum score, after 5 attempts explain why and give up.
          """)
 
         explore_prompt = explore_template.format(lang=self.evo_config.language, 
-                                             code=evolve_block.inner_content)
+                                                code=evolve_block.inner_content,
+                                                score=parent.combined_score,
+                                                floor_score=floor_score)
 
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
-        evo_change = Agent(model, output_type=VerifiedChange | ChangeNotVerified, model_settings=settings)
-        evo_diff = Agent(model, output_type=NotNovel | NovelProgram, model_settings=settings)
+        explore_change = Agent(model, output_type=VerifiedChange | ChangeNotVerified, model_settings=settings)
+        explore_diff = Agent(model, output_type=NotNovel | NovelProgram, model_settings=settings)
 
-        async def confirm_change(parent_code: str, novel_code: str, change_type: str) -> str:
+        async def confirm_change(parent_code: str, novel_code: str, change: str) -> str:
             """
-            Verify that the specified change type was applied to the novel program relative to the parent.
+            Verify that the specified change was applied to the novel program relative to the parent.
 
             Args:
                 parent_code: The source code of the parent program.
                 novel_code: The source code of the proposed novel program.
-                change_type: A detailed description of the modification made (e.g. conceptual, algorithmic change,
+                change: A detailed description of the modification made (e.g. conceptual, algorithmic change,
                     refactoring, control-flow alteration, etc.).
 
             Returns:
                 A structured result indicating verification status:
-                - VerifiedChange: The change type was confirmed and the program is substantially different.
-                - ChangeNotVerified: The change type could not be confirmed or the program is not sufficiently novel,
-                  with an explanation of why.
+                - VerifiedChange: The change was confirmed to be made to the novel program
+                - ChangeNotVerified: The change could not be confirmed with an explanation of why.
             """
             change_template = textwrap.dedent("""
             Given the the following parent program and new program
@@ -526,16 +534,16 @@ class EvoWorker:
             ```{lang}
             {proposed_program}
             ```
-            Verify that the the following change type was made:
-            {change_type} 
+            Verify that the the following change was made:
+            {change} 
             Return `VerifiedChange` if the change described above was made to the code.
             Return `ChangeNotVerified` if the change described above was not made or cannot be confirmed, explain why.
             """)
             change_prompt = change_template.format(parent_code=parent_code,
                                               proposed_program=novel_code,
-                                              change_type=change_type,
+                                              change=change,
                                               lang=self.evo_config.language)
-            r = await evo_change.run(change_prompt)
+            r = await explore_change.run(change_prompt)
             return r.output
 
         async def confirm_novelty(parent_code: str, novel_code: str) -> bool:
@@ -569,16 +577,16 @@ class EvoWorker:
             diff_prompt = diff_template.format(parent_code=parent_code,
                                               proposed_program=novel_code,
                                               lang=self.evo_config.language)
-            r = await evo_diff.run(diff_prompt)
+            r = await explore_diff.run(diff_prompt)
             return r.output
 
-        async def submit_novel(ctx: RunContext[ExploreContext], novel_program: str, change_type: str) -> None:
+        async def submit_novel(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:
             """
             Submit a proposed novel program.
             Args:
                 novel_program: A novel program that is dramatically different from the parent that 
                     still functions correctly.
-                change_type: A detailed description of the modification made (e.g. , conceptual, algorithmic change,
+                change: A detailed description of the modification made (e.g. , conceptual, algorithmic change,
                     refactoring, control-flow alteration, etc.). 
             """
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
@@ -591,32 +599,36 @@ class EvoWorker:
             if results.get("correct"): 
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
-                    confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change_type)
-                    novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
-                    raise_str = ""
-                    if isinstance(confirmation, ChangeNotVerified):
-                        raise_str += "The change type could not be verified on submission. Here is the reason:\n"
-                        raise_str += confirmation.reasoning + "\n"
-                    if isinstance(novelty, NotNovel):
-                        raise_str += "The program is not substantially different from the parent program on submission. Here is the reason:\n"
-                        raise_str += novelty.reasoning + "\n"
-                    if raise_str != "":
-                        clear_results_dir(results_dir)
-                        raise ModelRetry(raise_str)
+                    if combined > ctx.deps.floor_score:
+                        confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change)
+                        novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
+                        raise_str = ""
+                        if isinstance(confirmation, ChangeNotVerified):
+                            raise_str += "The change type could not be verified on submission. Here is the reason:\n"
+                            raise_str += confirmation.reasoning + "\n"
+                        if isinstance(novelty, NotNovel):
+                            raise_str += "The program is not substantially different from the parent program on submission. Here is the reason:\n"
+                            raise_str += novelty.reasoning + "\n"
+                        if raise_str != "":
+                            clear_results_dir(results_dir)
+                            raise ModelRetry(raise_str)
 
-                    # Add the program to the database
-                    db_program = Program(
-                        id=str(uuid.uuid4()),
-                        code=evo_program,
-                        language=self.evo_config.language,
-                        parent_id=parent.id,
-                        generation=current_gen,
-                        code_diff="agent_explore",
-                        embedding=[],
-                        correct=True,
-                        combined_score=combined,
-                    )
-                    ray.get(self.db.add.remote(db_program))
+                        # Add the program to the database
+                        db_program = Program(
+                            id=str(uuid.uuid4()),
+                            code=evo_program,
+                            language=self.evo_config.language,
+                            parent_id=parent.id,
+                            generation=current_gen,
+                            code_diff="agent_explore",
+                            embedding=[],
+                            correct=True,
+                            combined_score=combined,
+                        )
+                        ray.get(self.db.add.remote(db_program))
+                    else:
+                        clear_results_dir(results_dir)
+                        raise ModelRetry("Novel program did not achieve the minimum score on submission.")
                 else:
                     clear_results_dir(results_dir)
                     raise ModelRetry("Novel program did not return a score on submission.")
@@ -633,13 +645,14 @@ class EvoWorker:
             model_settings=settings)
 
         @evo_explore.tool(retries = 3)
-        async def check_novelty_and_correctness(ctx: RunContext[ExploreContext], novel_program: str, change_type:str) -> str:
+        async def check_novelty_and_correctness(ctx: RunContext[ExploreContext], novel_program: str, change:str) -> str:
             """
-            Evaluate a proposed inner block for correctness and verify the described change type.
+            Evaluate a proposed novel program for correctness and verify the described change.
+            Confirm that it achieves a score greater than the performance floor.
 
             Args:
                 novel_program: A string containing a novel program that is dramtically different from the parent.
-                change_type: A detailed description of the modification made (e.g., algorithmic change,
+                change: A detailed description of the change made (e.g., algorithmic change,
                     refactoring, control-flow alteration, etc.).                
             Returns:
                 str: feedback for the agent including correctness, change verification, and novelty status.
@@ -656,23 +669,27 @@ class EvoWorker:
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
-                    confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change_type)
-                    novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
-
-                    if isinstance(confirmation, VerifiedChange):
-                        out_str += "The change type described was made to the program.\n"
-                    elif isinstance(confirmation, ChangeNotVerified):
-                        out_str += "The change type could not be verified. Here is the reason:\n"
-                        out_str += confirmation.reasoning + "\n"
-                    if isinstance(novelty, NovelProgram):
-                        out_str += "The program is substantially different from the parent program.\n"
-                    elif isinstance(novelty, NotNovel):
-                        out_str += "The program is not substantially different from the parent program. Here is the reason:\n"
-                        out_str += novelty.reasoning + "\n"
+                    if combined > ctx.deps.floor_score:
+                        out_str += f"It achieved a score of {combined}, which is an improvement over the minimum score of {ctx.deps.floor_score}.\n"
+                        confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change)
+                        novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
+                        if isinstance(confirmation, VerifiedChange):
+                            out_str += "The change type described was made to the program.\n"
+                        elif isinstance(confirmation, ChangeNotVerified):
+                            out_str += "The change type could not be verified. Use the following reasoning to fix the issue:\n"
+                            out_str += confirmation.reasoning + "\n"
+                        if isinstance(novelty, NovelProgram):
+                            out_str += "The program is substantially different from the parent program.\n"
+                        elif isinstance(novelty, NotNovel):
+                            out_str += "The program is not substantially different from the parent program. Use the following reasoning to fix the issue:\n"
+                            out_str += novelty.reasoning + "\n"
+                    else:
+                        out_str += f"It achieved a score of {combined}, which is NOT an improvement over the minimum score of {ctx.deps.floor_score}.\n"
+                        out_str += "Analyze why it failed to meet the performance floor and propose a better approach.\n"
                 else:
-                    out_str += "The program did execute correctly and didn't produce a score.\n"
+                    out_str += "Something happened and the score was not available in results. Analyze why this happened and propose a fix.\n"
             else:
-                out_str += "The program did not execute correctly and did not produce a valid score.\n"
+                out_str += "The program did not execute correctly and did not produce a valid score. Analyze why this happened and propose a fix.\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
             out_str += "Here is the standard output of the program:\n"
@@ -685,7 +702,7 @@ class EvoWorker:
             return out_str
 
         try:
-            evo_explore.run_sync(explore_prompt, deps=ExploreContext(evolve_block=evolve_block))
+            evo_explore.run_sync(explore_prompt, deps=ExploreContext(evolve_block=evolve_block, floor_score=floor_score))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 

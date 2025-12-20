@@ -72,10 +72,12 @@ class StrategyProbs(BaseModel):
 class ExploitContext(BaseModel):
     evolve_block: EvolveBlock
     parent_score: float
+    inference_start: float
 
 class ExploreContext(BaseModel):
     evolve_block: EvolveBlock
     floor_score: float
+    inference_start: float
 
 class VerifiedChange(BaseModel):
     """Use this when you can verify that the type of change provided was indeed made to the program."""
@@ -83,6 +85,7 @@ class VerifiedChange(BaseModel):
 class ChangeNotVerified(BaseModel):
     """Use this when type of change provided was *NOT* made to the program."""
     reasoning: str = Field(description="Explanation of why the change type was not verified.")
+    inference_start: float
 
 class NovelProgram(BaseModel):
     """Use this when the provided program is indeed substantially different from the parent."""
@@ -269,7 +272,7 @@ class EvoWorker:
         - **Signal:** A new best score appears after a plateau.
         - **Action:** **SNAP THE BEAM SHUT.**
         - **Focus:** `exploit_top_k=1`.
-        - **Reasoning:** We found a winner. Focus 100% of our {num_workers} workers on optimizing this single program immediately.
+        - **Reasoning:** We found a winner. Focus all of our {num_workers} workers on optimizing this single program immediately.
         - **Explore Floor:** explore_performance_floor recommendation 0.95. High standards. Do not accept regressions during any exploration.                                   
 
         **2. RISING PHASE (High Velocity)**
@@ -289,6 +292,8 @@ class EvoWorker:
         - **Signal:** Zero improvement for a duration **significantly longer** than historical norms.
         - **Action:** **THE "GRADUAL SHIFT" MANEUVER.**
         - **Logic:** Shift resources from Exploit to Explore **proportionally** to the severity of the stagnation. As the plateau drags on, progressively increase `explore_weight` and widen the nets.
+        - **Inference Time:** The table above shows inference time in seconds. It will get longer as programs that improve score get harder
+          to find. Take this into account before switching into stagnation mode. Avoid premature stagnation if inference times are increasing.                           
         - **Settings:**
             - **Exploit K:** Widen `exploit_top_k` to `2 * {num_workers}` (capped by `Total Programs`) to "Catch" mutants.
             - **Explore K:** Calibrate `explore_top_k` based on `Total Programs` and `Active Workers`.
@@ -296,7 +301,7 @@ class EvoWorker:
             - For general structural change: `explore_top_k` should be `min({total_programs}, 2 * {num_workers})`.
             - For radical architectural rewrite of elite code: `explore_top_k` should be `max(1, int({num_workers} * 0.1))` (small, focused pool of elites).
         """)
-        num_workers = 10
+        num_workers = 11
         total_programs = ray.get(self.db.total_programs.remote())
         prompt = template.format(best_score_table=best_score_table, num_workers=num_workers, total_programs=total_programs)
     
@@ -312,18 +317,19 @@ class EvoWorker:
         )[0]
 
         if mode == "exploit":
-            self.agent_exploit(current_gen, probs.exploit_top_k)
+            self.agent_exploit(current_gen, probs.exploit_top_k, probs.explore_top_k)
         else:
             self.agent_explore(current_gen, probs.explore_top_k, probs.explore_performance_floor)
 
 
-    def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
+    def agent_exploit(self, current_gen: int, parent_selection_top_k: int, explore_top_k: int):
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
         parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         evolve_block = extract_evolve_block(parent.code)
+        inference_start = time.time()
 
         exploit_template = textwrap.dedent("""
             ### MISSION
@@ -347,6 +353,7 @@ class EvoWorker:
             - **Efficiency:** You have a maximum of 5 attempts.
             - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
               but with an improved internal implementation.
+            - **Originality:** If you use `get_inspiration`, do NOT copy the code verbatim. Adapt the **concepts** to your specific context.
             
             ### COMPLETION
             - As soon as you achieve a score greater than {score}, submit your improved program using `submit_tool`.
@@ -388,6 +395,10 @@ class EvoWorker:
                             code_diff="agent_exploit",
                             correct=True,
                             combined_score=combined,
+                            metadata={
+                                "inference_time": time.time() - ctx.deps.inference_start,
+                                "compute_time": rtime,
+                            }
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:
@@ -399,7 +410,6 @@ class EvoWorker:
             else:
                 clear_results_dir(results_dir)
                 raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue.")
-
 
         evo_exploit = Agent(
             model,
@@ -453,8 +463,25 @@ class EvoWorker:
             clear_results_dir(results_dir)
             return out_str
 
+        @evo_exploit.tool_plain
+        def get_inspiration() -> str:
+            """Call this tool when you are stuck and need new ideas from other successful programs. 
+               It will sample a program from the database and provide its code and its score for inspiration.
+            """
+            insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=explore_top_k))
+            insp_str = ""
+            if not insp:
+                insp_str = "No programs are available in the database for inspiration at this time."
+            else:
+                insp_str += f"Use this program for inspiration. It had the following score: ***{insp.combined_score}***\n"
+                insp_block = extract_evolve_block(insp.code)
+                insp_str += f"```{self.evo_config.language}\n{insp_block.inner_content}\n```\n"
+            return insp_str
+
         try:
-            exploit_ctx = ExploitContext(evolve_block=evolve_block, parent_score=parent.combined_score)
+            exploit_ctx = ExploitContext(evolve_block=evolve_block, 
+                                         parent_score=parent.combined_score,
+                                         inference_start=inference_start)
             evo_exploit.run_sync(exploit_prompt, deps=exploit_ctx)
         except Exception as e:
             print(f"Agent encountered an error: {e}")
@@ -465,6 +492,7 @@ class EvoWorker:
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
         parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
+        inference_start = time.time()
 
         evolve_block = extract_evolve_block(parent.code)
         floor_score = parent.combined_score * explore_performance_floor
@@ -491,6 +519,7 @@ class EvoWorker:
             - **Efficiency:** You have a maximum of 5 attempts.
             - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
               but with a completely novel internal implementation.
+            - **Originality:** If you use `get_inspiration`, do NOT copy the code verbatim. Adapt the **concepts** to your specific context.                                           
                                            
             ### COMPLETION
             - As soon as the change type was verified, the program is substantially different from the parent
@@ -624,6 +653,9 @@ class EvoWorker:
                             embedding=[],
                             correct=True,
                             combined_score=combined,
+                            metadata={
+                                "inference_time": time.time() - ctx.deps.inference_start,
+                            }                            
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:
@@ -701,8 +733,23 @@ class EvoWorker:
             clear_results_dir(results_dir)            
             return out_str
 
+        @evo_explore.tool_plain
+        def get_inspiration() -> str:
+            """Call this tool when you are stuck and need new ideas from other successful programs. 
+               It will sample a program from the database and provide its code and its score for inspiration.
+            """
+            insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=parent_selection_top_k))
+            insp_str = ""
+            if not insp:
+                insp_str = "No programs are available in the database for inspiration at this time."
+            else:
+                insp_str += f"Use this program for inspiration. It had the following score: ***{insp.combined_score}***\n"
+                insp_block = extract_evolve_block(insp.code)
+                insp_str += f"```{self.evo_config.language}\n{insp_block.inner_content}\n```\n"
+            return insp_str
+
         try:
-            evo_explore.run_sync(explore_prompt, deps=ExploreContext(evolve_block=evolve_block, floor_score=floor_score))
+            evo_explore.run_sync(explore_prompt, deps=ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start))
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 

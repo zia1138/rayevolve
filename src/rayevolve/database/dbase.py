@@ -907,7 +907,7 @@ class ProgramDatabase:
         return selected_prog
 
     @db_retry()
-    def sample_all_topK(self, topK: int) -> Optional[Program]:
+    def sample_all_topK(self, topK: int, exclude_pid=[]) -> Optional[Program]:
         """Sample uniformly at random from the top-K correct programs (by combined_score)."""
         if not self.cursor:
             raise ConnectionError("DB not connected.")
@@ -928,7 +928,9 @@ class ProgramDatabase:
         if not rows:
             return None
 
-        top_ids = [row["id"] for row in rows]
+        top_ids = [row["id"] for row in rows if row["id"] not in exclude_pid]
+        if len(top_ids) == 0:
+            return None
 
         top_programs: List[Program] = []
         for pid in top_ids:
@@ -2179,7 +2181,7 @@ class ProgramDatabase:
         # Get all correct programs for the island, ordered by timestamp
         self.cursor.execute(
             """
-            SELECT timestamp, combined_score
+            SELECT timestamp, metadata, combined_score
             FROM programs
             WHERE correct = 1
             ORDER BY timestamp ASC
@@ -2188,15 +2190,20 @@ class ProgramDatabase:
         raw_history = self.cursor.fetchall()
 
         # Compute best_score_history (running maximum) and format values into a tab-delimited table
+        #debugpy.listen(5678)
+        #debugpy.wait_for_client()
+        #debugpy.breakpoint()      
         best_score_so_far = -float('inf')
-        history_lines = ["Time\tBest Score"] # Header row
+        history_lines = ["Time\tInference Time\tBest Score"] # Header row
         for row in raw_history:
+            metadata = json.loads(row["metadata"])
             timestamp = int(round(row["timestamp"], 0)) # Round timestamp to integer
+            inference_time = int(round(metadata["inference_time"],0))
             score = row["combined_score"] # Round score to 3 decimal places
             if score > best_score_so_far:
                 best_score_so_far = score
             # Append tab-delimited row
-            history_lines.append(f"{timestamp}\t{best_score_so_far}")
+            history_lines.append(f"{timestamp}\t{inference_time}\t{best_score_so_far}")
 
         # Join all rows with newlines
         return "\n".join(history_lines)

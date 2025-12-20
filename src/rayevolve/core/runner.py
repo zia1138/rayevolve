@@ -19,6 +19,7 @@ import asyncio
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
 from .worker2 import EvoWorker, EvoGen
+#from .worker import EvoWorker, EvoGen
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 from rayevolve.llm import (
     LLMClient,
@@ -201,7 +202,7 @@ class EvolutionRunner:
         gen = EvoGen.remote()  # generation counter
 
         all_refs = []
-        num_workers = 10
+        num_workers = 11
         batch_size = 1
         delay_between_batches = 0  # 1 minute in seconds
 
@@ -394,6 +395,7 @@ class EvolutionRunner:
             text_feedback=text_feedback,
             metadata={
                 "compute_time": rtime,
+                "inference_time": 0.0,  # No inference time for generation 0
                 "api_costs": api_costs,
                 "embed_cost": e_cost,
                 "novelty_cost": 0.0,  # No novelty cost for generation 0

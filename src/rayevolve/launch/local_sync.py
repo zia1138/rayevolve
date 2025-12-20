@@ -97,15 +97,15 @@ def submit(log_dir: str, cmd: list[str], verbose: bool = True):
             capture_output=True,
             text=True,
             env=env,
-            timeout=5*60, # 5 minutes timeout    
+            timeout=10*60, # 10 minutes timeout    
         )
     except subprocess.TimeoutExpired as e:
         print("Timeout command: " + ' '.join(cmd))
         completed = subprocess.CompletedProcess(
             args=cmd,
             returncode=255,
-            stdout="",
-            stderr="Process timed out"
+            stdout="Process timed out after 10 minutes.",
+            stderr=""
         )
 
     # Persist outputs to disk

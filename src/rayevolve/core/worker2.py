@@ -43,6 +43,7 @@ import logfire
 from enum import Enum
 
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+import difflib
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +286,7 @@ class EvoWorker:
         - **Signal:** Score is flat, but the duration is **comparable** to previous successful climbing intervals.
         - **Action:** **BROADEN THE BEAM (Balanced).**
         - **Focus:** `exploit_top_k` should match `Active Workers` ({num_workers}).
-        - **Reasoning:** Optimization is noisy. If it usually takes 100 attempts to find a gain, do not panic at 100 failures. Keep grinding.
+        - **Reasoning:** Optimization is noisy. Keep grinding.
         - **Explore Floor:** explore_performance_floor recommendation 0.80. Allow moderate variance to find local improvements.                                   
 
         **4. STAGNATION PHASE (The Wall)**
@@ -347,6 +348,7 @@ class EvoWorker:
             3. **Experiment:** Write the code to implement your idea.
                You are encouraged to add print statements to help you debug and understand the code behavior.
             4. **Evaluate:** Use `run_experiment` to get any output and the score.
+            5. **Inspiration:** Use `get_inspiration` to get concepts from other successful programs.  
              
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to identify new approaches for improvement.
@@ -357,7 +359,7 @@ class EvoWorker:
             
             ### COMPLETION
             - As soon as you achieve a score greater than {score}, submit your improved program using `submit_tool`.
-            - If you cannot beat the of the above code after 5 distinct hypotheses, give up and offer an explanation why.
+            - If you cannot beat the score of the above code after 5 distinct hypotheses, give up and offer an explanation why.
          """)
 
         exploit_prompt = exploit_template.format(lang=self.evo_config.language, 
@@ -423,7 +425,7 @@ class EvoWorker:
         def run_experiment(ctx: RunContext[ExploitContext], program: str, change: str) -> str:
             """
             Call this tool with an improved program that you want to evaluate. It will return
-            the results of executing the program including its score, correctness, and stdout.
+            the results of executing the program including its score, correctness, and stdout/stderr.
             Args:
                 program: A program that you think will achieve a higher score.
                 change: A detailed description of the change being tested and why it should improve performance.
@@ -445,7 +447,7 @@ class EvoWorker:
                 if combined is not None:
                     out_str += f"It achieved a score of {combined}\n"
                     if combined > ctx.deps.parent_score:
-                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. Learn from this success.\n"
+                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. You can now use submit_tool.\n"
                     else:
                         out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}. Analyze why it failed and propose a better approach.\n"
                 else:
@@ -458,14 +460,17 @@ class EvoWorker:
             out_str += "```"
             out_str += results["stdout_log"] + "\n"
             out_str += "```\n"
-
+            out_str += "Here is the standard error of the program:\n"
+            out_str += "```"
+            out_str += results["stderr_log"] + "\n"
+            out_str += "```\n"
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)
             return out_str
 
         @evo_exploit.tool_plain
         def get_inspiration() -> str:
-            """Call this tool when you are stuck and need new ideas from other successful programs. 
+            """Call this tool to obtain concepts from other successful programs after you run an experiment.
                It will sample a program from the database and provide its code and its score for inspiration.
             """
             insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=explore_top_k))
@@ -553,25 +558,21 @@ class EvoWorker:
                 - VerifiedChange: The change was confirmed to be made to the novel program
                 - ChangeNotVerified: The change could not be confirmed with an explanation of why.
             """
+            diff = "\n".join(difflib.unified_diff(
+                parent_code.splitlines(),
+                novel_code.splitlines(),
+                fromfile='parent',tofile='novel_code'))
             change_template = textwrap.dedent("""
-            Given the the following parent program and new program
-            Parent program:                                                                
-            ```{lang}
-            {parent_code}
-            ```
-            New program:                                
-            ```{lang}
-            {proposed_program}
+            Given the the following parent program and new program diff.
+            ```diff
+            {diff}
             ```
             Verify that the the following change was made:
             {change} 
             Return `VerifiedChange` if the change described above was made to the code.
             Return `ChangeNotVerified` if the change described above was not made or cannot be confirmed, explain why.
             """)
-            change_prompt = change_template.format(parent_code=parent_code,
-                                              proposed_program=novel_code,
-                                              change=change,
-                                              lang=self.evo_config.language)
+            change_prompt = change_template.format(diff=diff, change=change)
             r = await explore_change.run(change_prompt)
             return r.output
 
@@ -586,26 +587,23 @@ class EvoWorker:
             Returns:
                 - VerifiedChangeAndNovel: The program exhibits substantial, meaningful differences.
                 - NotNovel: The program is not sufficiently different, with reasoning.
-            """            
+            """       
+            diff = "\n".join(difflib.unified_diff(
+                parent_code.splitlines(),
+                novel_code.splitlines(),
+                fromfile='parent',tofile='novel_code'))     
             diff_template = textwrap.dedent("""
-            Given the the following parent program and new program
-            Parent program:                                                                
-            ```{lang}
-            {parent_code}
+            Given the the following diff between the parent program and novel program:
+            ```diff
+            {diff}
             ```
-            New program:                                
-            ```{lang}
-            {proposed_program}
-            ```
-            Does the new program have substantial changes including conceptual, algorithmic, changes to
+            Does the novel program have substantial changes including conceptual, algorithmic, changes to
             modularization, data flow, control flow, or architectural patterns, or changes in parameters and parameterization.   
             from the parent program? Your bar should be high for what constitutes a substantial change.
             Return `NovelProgram` if the program is substantially different from the parent.
             Return `NotNovel` if the program is not substantially different from the parent and explain why. 
             """)
-            diff_prompt = diff_template.format(parent_code=parent_code,
-                                              proposed_program=novel_code,
-                                              lang=self.evo_config.language)
+            diff_prompt = diff_template.format(diff=diff)
             r = await explore_diff.run(diff_prompt)
             return r.output
 
@@ -728,6 +726,10 @@ class EvoWorker:
             out_str += "```"
             out_str += results["stdout_log"] + "\n"
             out_str += "```\n"
+            out_str += "Here is the standard error of the program:\n"
+            out_str += "```"
+            out_str += results["stderr_log"] + "\n"
+            out_str += "```\n"
 
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)            
@@ -735,7 +737,7 @@ class EvoWorker:
 
         @evo_explore.tool_plain
         def get_inspiration() -> str:
-            """Call this tool when you are stuck and need new ideas from other successful programs. 
+            """Call this tool to obtain concepts from other successful programs. 
                It will sample a program from the database and provide its code and its score for inspiration.
             """
             insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=parent_selection_top_k))

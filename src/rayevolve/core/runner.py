@@ -18,8 +18,8 @@ import ray
 import asyncio
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
-#from .worker2 import EvoWorker, EvoGen
-from .worker import EvoWorker, EvoGen
+from .worker2 import EvoWorker, EvoGen
+#from .worker import EvoWorker, EvoGen
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 from rayevolve.llm import (
     LLMClient,

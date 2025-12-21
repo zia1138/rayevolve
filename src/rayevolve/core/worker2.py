@@ -1,52 +1,27 @@
 from __future__ import annotations
 import random
-from sys import stdout
 import uuid
 import time
 import logging
-import yaml
-from rich.logging import RichHandler
-from rich.table import Table
-from rich.console import Console
-import rich.box
-from typing import List, Optional, Union, cast, Tuple
-from datetime import datetime
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
 from subprocess import Popen
 import ray
-import asyncio
+
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
-from rayevolve.llm import (
-    LLMClient,
-    extract_between,
-    EmbeddingClient,
-    BanditBase,
-    AsymmetricUCB,
-)
-from rayevolve.edit import (
-    apply_diff_patch,
-    apply_full_patch,
-    summarize_diff,
-    redact_immutable,
-)
-from rayevolve.core.sampler import PromptSampler
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
 
 import debugpy
-
 import textwrap
+
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, ModelMessage, RunContext, RunUsage, UsageLimits
-import logfire
-from enum import Enum
-
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
-import difflib
+
+import logfire
+import importlib.metadata
 
 logger = logging.getLogger(__name__)
-
 
 class StrategyProbs(BaseModel):
     """
@@ -79,21 +54,9 @@ class ExploreContext(BaseModel):
     evolve_block: EvolveBlock
     floor_score: float
     inference_start: float
-
-class VerifiedChange(BaseModel):
-    """Use this when you can verify that the type of change provided was indeed made to the program."""
-
-class ChangeNotVerified(BaseModel):
-    """Use this when type of change provided was *NOT* made to the program."""
-    reasoning: str = Field(description="Explanation of why the change type was not verified.")
-    inference_start: float
-
-class NovelProgram(BaseModel):
-    """Use this when the provided program is indeed substantially different from the parent."""
-
-class NotNovel(BaseModel):
-    """Use this when the program is not substantially different from the parent."""
-    reasoning: str = Field(description="Explanation of why the program is not novel.")
+    run_experiment_count: int = 0
+    list_package_count: int = 0
+    inspiration_count: int = 0
 
 def clear_results_dir(results_dir: str) -> None:
     """
@@ -113,8 +76,7 @@ def clear_results_dir(results_dir: str) -> None:
 
 class EvolveBlock(BaseModel):
     """
-    Represents the dissected components of a source code file containing
-    EVOLVE-BLOCK markers.
+    Represents the dissected components of a source code file containing EVOLVE-BLOCK markers.
     """
     pre_block: str = Field(description="Content before the EVOLVE-BLOCK-START line.")
     start_marker_line: str = Field(description="The complete line containing the EVOLVE-BLOCK-START marker.")
@@ -237,7 +199,7 @@ class EvoWorker:
             msg = f"Language {self.evo_config.language} not supported"
             raise ValueError(msg)
 
-        logfire.configure()
+        logfire.configure(scrubbing=False)
         logfire.instrument_pydantic_ai()
 
     def run(self):
@@ -253,7 +215,8 @@ class EvoWorker:
 
         template = textwrap.dedent("""
         You are the Strategic Supervisor for an evolutionary optimization process.
-        Your job is to tune the **Search Distribution** (Exploit vs. Explore) and **Beam Width** (Top-K) to match the current difficulty of the fitness landscape and the available compute resources.
+        Your job is to tune the **Search Distribution** (Exploit vs. Explore) and **Beam Width** (Top-K) to match the 
+        current difficulty of the fitness landscape and the available compute resources.
 
         ### CURRENT STATUS
         - **Active Workers:** {num_workers} (Bandwidth)
@@ -292,9 +255,10 @@ class EvoWorker:
         **4. STAGNATION PHASE (The Wall)**
         - **Signal:** Zero improvement for a duration **significantly longer** than historical norms.
         - **Action:** **THE "GRADUAL SHIFT" MANEUVER.**
-        - **Logic:** Shift resources from Exploit to Explore **proportionally** to the severity of the stagnation. As the plateau drags on, progressively increase `explore_weight` and widen the nets.
+        - **Logic:** Shift resources from Exploit to Explore **proportionally** to the severity of the stagnation. 
+          As the plateau drags on, progressively increase `explore_weight` and widen the nets.
         - **Inference Time:** The table above shows inference time in seconds. It will get longer as programs that improve score get harder
-          to find. Take this into account before switching into stagnation mode. Avoid premature stagnation if inference times are increasing.                           
+          to find. Take this into account before switching into stagnation mode. Avoid premature stagnation if inference times are increasing. 
         - **Settings:**
             - **Exploit K:** Widen `exploit_top_k` to `2 * {num_workers}` (capped by `Total Programs`) to "Catch" mutants.
             - **Explore K:** Calibrate `explore_top_k` based on `Total Programs` and `Active Workers`.
@@ -337,13 +301,14 @@ class EvoWorker:
             The code below has achieved a score of **{score}**. Your goal is to beat this score.
            
             ### CODE
-            ```{lang}                             
+            ```python                             
             {code}
             ```
  
             ### PROTOCOL
             You must follow the **Scientific Method**:
             1. **Analyze:** Analyze the code above and come up with an approach to improve the score.
+            2. **Packages** Use any imported packages to help you implement your ideas for improving the score.
             2. **Innovate:** Focus on substantial algorithmic changes and rewrites that can lead to significant improvements.                            
             3. **Experiment:** Write the code to implement your idea.
                You are encouraged to add print statements to help you debug and understand the code behavior.
@@ -358,32 +323,29 @@ class EvoWorker:
             - **Originality:** If you use `get_inspiration`, do NOT copy the code verbatim. Adapt the **concepts** to your specific context.
             
             ### COMPLETION
-            - As soon as you achieve a score greater than {score}, submit your improved program using `submit_tool`.
+            - As soon as you achieve a score greater than {score}, submit your improved program using `submit`.
             - If you cannot beat the score of the above code after 5 distinct hypotheses, give up and offer an explanation why.
          """)
 
-        exploit_prompt = exploit_template.format(lang=self.evo_config.language, 
-                                                code=evolve_block.inner_content, 
-                                                score=parent.combined_score)
+        exploit_prompt = exploit_template.format(code=evolve_block.inner_content, score=parent.combined_score)
 
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
 
-        def submit_tool(ctx: RunContext[ExploitContext], program: str) -> None:
+        def submit(ctx: RunContext[ExploitContext], program: str) -> None:
             """
             Submit an improved program when you achieve a higher score relative to the parent program.
             Args:
                 program: Code for the program that achieved a higher score.
             """            
             evo_program = ctx.deps.evolve_block.reconstruct(program)
-
             Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
-
-            if results.get("correct"): 
+            
+            if results.get("correct", False): 
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.parent_score:
@@ -411,14 +373,14 @@ class EvoWorker:
                     raise ModelRetry("Improved program did not return a score on submission. Analyze why this happened and fix the issue.")
             else:
                 clear_results_dir(results_dir)
-                raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue.")
+                raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue. Here is the error:", results.get("error", "Unknown Error"))
 
         evo_exploit = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
             deps_type=ExploitContext,
-            output_type=[str, submit_tool],
-            retries=3,            
+            output_type=[str, submit],
+            retries=3,
             model_settings=settings)
 
         @evo_exploit.tool(retries = 3)
@@ -432,28 +394,27 @@ class EvoWorker:
             Returns:
                 str: A human-readable report of the results of the experiment.
             """
-            # Reconstruct the full program
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
-            # Run it.
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
 
             out_str = ""
-            if results.get("correct"):
+            if results.get("correct", False):
                 out_str += "The program executed correctly and produced a valid result.\n"
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     out_str += f"It achieved a score of {combined}\n"
                     if combined > ctx.deps.parent_score:
-                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. You can now use submit_tool.\n"
+                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. You can now use `submit`.\n"
                     else:
                         out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}. Analyze why it failed and propose a better approach.\n"
                 else:
                     out_str += "Something happened and the score was not available in results. Analyze why this happened and propose a fix.\n"
             else:
                 out_str += "The program did not execute correctly and did not produce a valid result. Analyze why this happened and propose a fix.\n"
+                out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
             out_str += "Here is the standard output of the program:\n"
@@ -468,20 +429,6 @@ class EvoWorker:
             clear_results_dir(results_dir)
             return out_str
 
-        @evo_exploit.tool_plain
-        def get_inspiration() -> str:
-            """Call this tool to obtain concepts from other successful programs after you run an experiment.
-               It will sample a program from the database and provide its code and its score for inspiration.
-            """
-            insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=explore_top_k))
-            insp_str = ""
-            if not insp:
-                insp_str = "No programs are available in the database for inspiration at this time."
-            else:
-                insp_str += f"Use this program for inspiration. It had the following score: ***{insp.combined_score}***\n"
-                insp_block = extract_evolve_block(insp.code)
-                insp_str += f"```{self.evo_config.language}\n{insp_block.inner_content}\n```\n"
-            return insp_str
 
         try:
             exploit_ctx = ExploitContext(evolve_block=evolve_block, 
@@ -506,108 +453,44 @@ class EvoWorker:
             The code below has achieved a score of **{score}**. 
             Your goal is to produce a dramatically different solution that still works correctly and
             achieves a score of **greater than {floor_score}**.
-            You should consider different types of substantive changes including conceptual, algorithmic, changes to
-            modularization, data flow, control flow, or architectural patterns, or changes in parameters
-            and parameterization, 
+            You should consider different types of substantive changes including use of external packages, 
+            conceptual, algorithmic, changes to modularization, data flow, control flow, or architectural patterns, or changes in parameters
+            and parameterization, etc.
            
             ### CODE
-            ```{lang}                             
+            ```python
             {code}
             ```
                                          
             ### PROTOCOL
             You must propose a different solution and determine it is correct. You can submit 
-            your solution to `check_novelty_and_correctness` with the change type you made and get feedback.
+            your solution to `run_experiment` with a description of the changes you made to get feedback.
+            Identify helpful packages that will lead to creative solutions. You can use `list_packages` to see what is installed and
+            import these packages in your code. You can also use `install_package` to install new packages.                                           
              
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to help you identify a novel approach.
             - **Efficiency:** You have a maximum of 5 attempts.
             - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
               but with a completely novel internal implementation.
-            - **Originality:** If you use `get_inspiration`, do NOT copy the code verbatim. Adapt the **concepts** to your specific context.                                           
+            - **Originality:** If you use `get_inspiration`, do NOT copy the code verbatim. Adapt the **concepts** to your specific context. 
                                            
             ### COMPLETION
-            - As soon as the change type was verified, the program is substantially different from the parent
-              and achieves a score greater than {floor_score}, use the submit_novel tool to submit your novel program.
+            - Make sure you perform research using the `list_packages` tool to identify useful pacakges that help you find novel solutions.
+            - Make sure you perform research usign the `get_inspiration` tool to identify useful concepts from other successful programs.    
+            - Once you achieve a score greater than {floor_score}, use the `submit` tool to submit your novel program.
             - If you cannot find a correct, novel program that achieves the minimum score, after 5 attempts explain why and give up.
-         """)
+        """)
 
-        explore_prompt = explore_template.format(lang=self.evo_config.language, 
-                                                code=evolve_block.inner_content,
+        explore_prompt = explore_template.format(code=evolve_block.inner_content,
                                                 score=parent.combined_score,
                                                 floor_score=floor_score)
 
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+        #explore_packages = Agent(model, output_type=VerifiedChange | ChangeNotVerified, model_settings=settings)
 
-        explore_change = Agent(model, output_type=VerifiedChange | ChangeNotVerified, model_settings=settings)
-        explore_diff = Agent(model, output_type=NotNovel | NovelProgram, model_settings=settings)
-
-        async def confirm_change(parent_code: str, novel_code: str, change: str) -> str:
-            """
-            Verify that the specified change was applied to the novel program relative to the parent.
-
-            Args:
-                parent_code: The source code of the parent program.
-                novel_code: The source code of the proposed novel program.
-                change: A detailed description of the modification made (e.g. conceptual, algorithmic change,
-                    refactoring, control-flow alteration, etc.).
-
-            Returns:
-                A structured result indicating verification status:
-                - VerifiedChange: The change was confirmed to be made to the novel program
-                - ChangeNotVerified: The change could not be confirmed with an explanation of why.
-            """
-            diff = "\n".join(difflib.unified_diff(
-                parent_code.splitlines(),
-                novel_code.splitlines(),
-                fromfile='parent',tofile='novel_code'))
-            change_template = textwrap.dedent("""
-            Given the the following parent program and new program diff.
-            ```diff
-            {diff}
-            ```
-            Verify that the the following change was made:
-            {change} 
-            Return `VerifiedChange` if the change described above was made to the code.
-            Return `ChangeNotVerified` if the change described above was not made or cannot be confirmed, explain why.
-            """)
-            change_prompt = change_template.format(diff=diff, change=change)
-            r = await explore_change.run(change_prompt)
-            return r.output
-
-        async def confirm_novelty(parent_code: str, novel_code: str) -> bool:
-            """
-            Evaluate whether the proposed program is substantially novel relative to the parent program.
-
-            Args:
-                parent_code: Source code of the parent program used as the baseline.
-                novel_code: Source code of the proposed novel program to evaluate.
-
-            Returns:
-                - VerifiedChangeAndNovel: The program exhibits substantial, meaningful differences.
-                - NotNovel: The program is not sufficiently different, with reasoning.
-            """       
-            diff = "\n".join(difflib.unified_diff(
-                parent_code.splitlines(),
-                novel_code.splitlines(),
-                fromfile='parent',tofile='novel_code'))     
-            diff_template = textwrap.dedent("""
-            Given the the following diff between the parent program and novel program:
-            ```diff
-            {diff}
-            ```
-            Does the novel program have substantial changes including conceptual, algorithmic, changes to
-            modularization, data flow, control flow, or architectural patterns, or changes in parameters and parameterization.   
-            from the parent program? Your bar should be high for what constitutes a substantial change.
-            Return `NovelProgram` if the program is substantially different from the parent.
-            Return `NotNovel` if the program is not substantially different from the parent and explain why. 
-            """)
-            diff_prompt = diff_template.format(diff=diff)
-            r = await explore_diff.run(diff_prompt)
-            return r.output
-
-        async def submit_novel(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:
+        async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:
             """
             Submit a proposed novel program.
             Args:
@@ -623,24 +506,10 @@ class EvoWorker:
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
 
-            if results.get("correct"): 
+            if results.get("correct", False): 
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.floor_score:
-                        confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change)
-                        novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
-                        raise_str = ""
-                        if isinstance(confirmation, ChangeNotVerified):
-                            raise_str += "The change type could not be verified on submission. Here is the reason:\n"
-                            raise_str += confirmation.reasoning + "\n"
-                        if isinstance(novelty, NotNovel):
-                            raise_str += "The program is not substantially different from the parent program on submission. Here is the reason:\n"
-                            raise_str += novelty.reasoning + "\n"
-                        if raise_str != "":
-                            clear_results_dir(results_dir)
-                            raise ModelRetry(raise_str)
-
-                        # Add the program to the database
                         db_program = Program(
                             id=str(uuid.uuid4()),
                             code=evo_program,
@@ -653,7 +522,8 @@ class EvoWorker:
                             combined_score=combined,
                             metadata={
                                 "inference_time": time.time() - ctx.deps.inference_start,
-                            }                            
+                                "compute_time": rtime,
+                            }
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:
@@ -664,29 +534,36 @@ class EvoWorker:
                     raise ModelRetry("Novel program did not return a score on submission.")
             else:
                 clear_results_dir(results_dir)
-                raise ModelRetry("Novel program was not correct on submission.")
+                raise ModelRetry("Novel program was not correct on submission. Here is the error:", results.get("error", "Unknown Error"))
 
         evo_explore = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
             deps_type=ExploreContext,
-            output_type=[str, submit_novel],
+            output_type=[str, submit],
             retries=3,
             model_settings=settings)
 
         @evo_explore.tool(retries = 3)
-        async def check_novelty_and_correctness(ctx: RunContext[ExploreContext], novel_program: str, change:str) -> str:
+        async def run_experiment(ctx: RunContext[ExploreContext], novel_program: str, change:str) -> str:
             """
-            Evaluate a proposed novel program for correctness and verify the described change.
-            Confirm that it achieves a score greater than the performance floor.
+            Run the novel program and confirm it is correct and check if it achieves the minimum score.
 
             Args:
-                novel_program: A string containing a novel program that is dramtically different from the parent.
+                novel_program: A string containing a novel program that is dramatically different from the parent.
                 change: A detailed description of the change made (e.g., algorithmic change,
                     refactoring, control-flow alteration, etc.).                
             Returns:
-                str: feedback for the agent including correctness, change verification, and novelty status.
+                str: feedback for the agent including correctness, score, stdout, and stderr.
             """
+            if ctx.deps.run_experiment_count > 0:
+                if ctx.deps.list_package_count == 0:
+                    return "You must use `list_packages` to research useful packages at least once before running another experiment."                
+                if ctx.deps.inspiration_count == 0:
+                    return "You must use `get_inspiration` to identify useful concepts from other successful programs at least once before running another experiment."
+
+            ctx.deps.run_experiment_count += 1
+
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             Path(exec_fname).write_text(evo_program, "utf-8")
             start_time = time.time()
@@ -695,24 +572,12 @@ class EvoWorker:
             rtime = time.time() - start_time
 
             out_str = ""
-            if results.get("correct"):
+            if results.get("correct", False):
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
                     if combined > ctx.deps.floor_score:
                         out_str += f"It achieved a score of {combined}, which is an improvement over the minimum score of {ctx.deps.floor_score}.\n"
-                        confirmation = await confirm_change(ctx.deps.evolve_block.inner_content, novel_program, change)
-                        novelty = await confirm_novelty(ctx.deps.evolve_block.inner_content, novel_program)
-                        if isinstance(confirmation, VerifiedChange):
-                            out_str += "The change type described was made to the program.\n"
-                        elif isinstance(confirmation, ChangeNotVerified):
-                            out_str += "The change type could not be verified. Use the following reasoning to fix the issue:\n"
-                            out_str += confirmation.reasoning + "\n"
-                        if isinstance(novelty, NovelProgram):
-                            out_str += "The program is substantially different from the parent program.\n"
-                        elif isinstance(novelty, NotNovel):
-                            out_str += "The program is not substantially different from the parent program. Use the following reasoning to fix the issue:\n"
-                            out_str += novelty.reasoning + "\n"
                     else:
                         out_str += f"It achieved a score of {combined}, which is NOT an improvement over the minimum score of {ctx.deps.floor_score}.\n"
                         out_str += "Analyze why it failed to meet the performance floor and propose a better approach.\n"
@@ -724,22 +589,23 @@ class EvoWorker:
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
             out_str += "Here is the standard output of the program:\n"
             out_str += "```"
-            out_str += results["stdout_log"] + "\n"
+            out_str += results.get("stdout_log", "") + "\n"
             out_str += "```\n"
             out_str += "Here is the standard error of the program:\n"
             out_str += "```"
-            out_str += results["stderr_log"] + "\n"
+            out_str += results.get("stderr_log", "") + "\n"
             out_str += "```\n"
 
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)            
             return out_str
 
-        @evo_explore.tool_plain
-        def get_inspiration() -> str:
+        @evo_explore.tool
+        def get_inspiration(ctx: RunContext[ExploreContext]) -> str:
             """Call this tool to obtain concepts from other successful programs. 
                It will sample a program from the database and provide its code and its score for inspiration.
             """
+            ctx.deps.inspiration_count += 1
             insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=parent_selection_top_k))
             insp_str = ""
             if not insp:
@@ -747,11 +613,29 @@ class EvoWorker:
             else:
                 insp_str += f"Use this program for inspiration. It had the following score: ***{insp.combined_score}***\n"
                 insp_block = extract_evolve_block(insp.code)
-                insp_str += f"```{self.evo_config.language}\n{insp_block.inner_content}\n```\n"
+                insp_str += f"```python\n{insp_block.inner_content}\n```\n"
             return insp_str
 
+        @evo_explore.tool
+        def list_packages(ctx: RunContext[ExploreContext]) -> str:
+            """Call this tool to list the installed packages in the execution environment."""
+            ctx.deps.list_package_count += 1
+            pkg_names = [name for name in sorted(dist.metadata["Name"] for dist in importlib.metadata.distributions())]
+            return "Installed packages:\n" + "\n".join(pkg_names)
+
+        @evo_explore.tool
+        def install_package(ctx: RunContext[ExploreContext], package_name: str) -> str:
+            """Call this tool to install a new package in the execution environment."""
+            process = Popen(["uv", "pip", "install", package_name])
+            process.wait()
+            if process.returncode == 0:
+                return f"Package {package_name} installed successfully."
+            else:
+                return f"Failed to install package {package_name}."
+
         try:
-            evo_explore.run_sync(explore_prompt, deps=ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start))
+            explore_ctx = ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start)
+            evo_explore.run_sync(explore_prompt, deps=explore_ctx)
         except Exception as e:
             print(f"Agent encountered an error: {e}")
 

@@ -487,7 +487,7 @@ class EvoWorker:
 
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
-        package_expert = Agent(model, model_settings=settings)
+        package_expert = Agent(model, model_settings=settings, system_prompt=self.evo_config.task_sys_msg)
 
         async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:
             """

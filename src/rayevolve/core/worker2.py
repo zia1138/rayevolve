@@ -297,7 +297,6 @@ class EvoWorker:
         inference_start = time.time()
 
         exploit_template = textwrap.dedent("""
-            ### MISSION
             The code below has achieved a score of **{score}**. Your goal is to beat this score.
            
             ### CODE
@@ -320,7 +319,6 @@ class EvoWorker:
             - **Efficiency:** You have a maximum of 5 attempts.
             - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
               but with an improved internal implementation.
-            - **Originality:** If you use `get_inspiration`, do NOT copy the code verbatim. Adapt the **concepts** to your specific context.
             
             ### COMPLETION
             - As soon as you achieve a score greater than {score}, submit your improved program using `submit`.
@@ -477,7 +475,8 @@ class EvoWorker:
                                            
             ### COMPLETION
             - Make sure you perform research using the `list_packages` tool to identify useful pacakges that help you find novel solutions.
-            - Make sure you perform research usign the `get_inspiration` tool to identify useful concepts from other successful programs.    
+            - Make sure you perform research using the `get_inspiration` tool to identify useful concepts from other successful programs.    
+            - Make sure you perform research using the `consult_package_expert` tool to identify useful packages for your novel program.
             - Once you achieve a score greater than {floor_score}, use the `submit` tool to submit your novel program.
             - If you cannot find a correct, novel program that achieves the minimum score, after 5 attempts explain why and give up.
         """)
@@ -488,7 +487,7 @@ class EvoWorker:
 
         model = GoogleModel('gemini-2.5-flash')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
-        #explore_packages = Agent(model, output_type=VerifiedChange | ChangeNotVerified, model_settings=settings)
+        package_expert = Agent(model, model_settings=settings)
 
         async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:
             """
@@ -528,13 +527,13 @@ class EvoWorker:
                         ray.get(self.db.add.remote(db_program))
                     else:
                         clear_results_dir(results_dir)
-                        raise ModelRetry("Novel program did not achieve the minimum score on submission.")
+                        raise ModelRetry("Novel program did not achieve the minimum score on submission.  Analyze why it failed and fix the issue.")
                 else:
                     clear_results_dir(results_dir)
-                    raise ModelRetry("Novel program did not return a score on submission.")
+                    raise ModelRetry("Novel program did not return a score on submission. Analyze why this happened and fix the issue.")
             else:
                 clear_results_dir(results_dir)
-                raise ModelRetry("Novel program was not correct on submission. Here is the error:", results.get("error", "Unknown Error"))
+                raise ModelRetry("Novel program was not correct on submission. Analyze why this happened and fix the issue. Here is the error: " + results.get("error", "Unknown Error"))
 
         evo_explore = Agent(
             model,
@@ -558,7 +557,7 @@ class EvoWorker:
             """
             if ctx.deps.run_experiment_count > 0:
                 if ctx.deps.list_package_count == 0:
-                    return "You must use `list_packages` to research useful packages at least once before running another experiment."                
+                    return "You must use `list_packages` or `consult_package_expert` to research useful packages at least once before running another experiment."                
                 if ctx.deps.inspiration_count == 0:
                     return "You must use `get_inspiration` to identify useful concepts from other successful programs at least once before running another experiment."
 
@@ -585,6 +584,7 @@ class EvoWorker:
                     out_str += "Something happened and the score was not available in results. Analyze why this happened and propose a fix.\n"
             else:
                 out_str += "The program did not execute correctly and did not produce a valid score. Analyze why this happened and propose a fix.\n"
+                out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
             out_str += "Here is the standard output of the program:\n"
@@ -632,6 +632,21 @@ class EvoWorker:
                 return f"Package {package_name} installed successfully."
             else:
                 return f"Failed to install package {package_name}."
+
+        @evo_explore.tool
+        async def consult_package_expert(ctx: RunContext[ExploreContext], novel_program: str) -> str:
+            """Call this tool to consult the package expert about which packages to use for your novel program."""
+            ctx.deps.list_package_count += 1
+            expert_template = textwrap.dedent("""
+            Given the following novel program, suggest useful packages that can help it achive a score of **greater than {floor_score}**.                                               
+            ```python
+            {code}
+            ```
+            List the packages and concisely explain how each package can help improve the program.
+            """)            
+            expert_prompt = expert_template.format(code=novel_program, floor_score=floor_score)
+            response = await package_expert.run(expert_prompt)
+            return response.output
 
         try:
             explore_ctx = ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start)

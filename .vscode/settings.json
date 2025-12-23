@@ -3,16 +3,19 @@
     "files.exclude": {
         "**/__pycache__": true,
         ".venv": true,
-        ".logfire": true        
+        ".logfire": true,
+        "**/.pixi": true
     },
     "search.exclude": {
         "**/__pycache__": true,
         ".venv": true,
-        ".logfire": true
+        ".logfire": true,
+        "**/.pixi": true
     },
     "files.watcherExclude": {
         "**/__pycache__": true,
         ".venv/**": true,      // or ".venv": true both are fine
-        ".logfire": true
+        ".logfire": true,
+        "**/.pixi": true
     }
 }

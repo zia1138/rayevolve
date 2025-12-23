@@ -3,6 +3,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Optional
+import typer
 
 
 def load_programs_to_df(db_path_str: str) -> Optional[pd.DataFrame]:
@@ -210,3 +211,39 @@ def store_best_path(df: pd.DataFrame, results_dir: str):
         print(f"Saved base code to {base_path}")
         print(row["patch_name"])
         i += 1
+
+
+app = typer.Typer(help="Load the 'programs' table from an SQLite DB to a DataFrame.")
+
+
+@app.command()
+def run(
+    db_path: Path = typer.Argument(..., exists=True, readable=True, help="Path to evolution_db.sqlite"),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Optional path to write the DataFrame as Parquet"
+    ),
+    head: int = typer.Option(0, help="Print the first N rows to stdout (0 to skip)"),
+):
+    """Load programs into a DataFrame from the provided SQLite file.
+
+    If --output is provided, writes Parquet to that path. Otherwise prints a brief summary.
+    """
+    df = load_programs_to_df(str(db_path))
+    if df is None:
+        typer.echo(f"Failed to load DataFrame from: {db_path}")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Loaded DataFrame with shape: {df.shape}")
+    if output:
+        try:
+            df.to_parquet(output, index=False)
+            typer.echo(f"Wrote Parquet to: {output}")
+        except Exception as e:
+            typer.echo(f"Error writing Parquet to {output}: {e}")
+            raise typer.Exit(code=1)
+    elif head > 0:
+        # Print a small preview
+        typer.echo(df.head(head).to_string(index=False))
+
+if __name__ == "__main__":
+    app()

@@ -1,0 +1,14 @@
+[workspace]
+authors = ["Zia Khan <zkhan@alumni.princeton.edu>"]
+channels = ["conda-forge"]
+name = "notebooks"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+jupyterlab = ">=4.5.1,<5"
+r-irkernel = ">=1.3.2,<2"
+r-tidyverse = ">=2.0.0,<3"
+r-arrow = ">=22.0.0,<23"

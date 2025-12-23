@@ -287,7 +287,7 @@ class EvoWorker:
             self.agent_explore(current_gen, probs.explore_top_k, probs.explore_performance_floor)
 
 
-    def agent_exploit(self, current_gen: int, parent_selection_top_k: int, explore_top_k: int):
+    def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
@@ -312,7 +312,6 @@ class EvoWorker:
             3. **Experiment:** Write the code to implement your idea.
                You are encouraged to add print statements to help you debug and understand the code behavior.
             4. **Evaluate:** Use `run_experiment` to get any output and the score.
-            5. **Inspiration:** Use `get_inspiration` to get concepts from other successful programs.  
              
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to identify new approaches for improvement.
@@ -550,7 +549,7 @@ class EvoWorker:
 
             Args:
                 novel_program: A string containing a novel program that is dramatically different from the parent.
-                change: A detailed description of the change made (e.g., algorithmic change,
+                change: A detailed description of the change made (e.g., new package imports, algorithmic change,
                     refactoring, control-flow alteration, etc.).                
             Returns:
                 str: feedback for the agent including correctness, score, stdout, and stderr.
@@ -603,7 +602,8 @@ class EvoWorker:
         @evo_explore.tool
         def get_inspiration(ctx: RunContext[ExploreContext]) -> str:
             """Call this tool to obtain concepts from other successful programs. 
-               It will sample a program from the database and provide its code and its score for inspiration.
+               It will sample a program from the database and provide its code and its score.
+               Use this program for inspiration, but do NOT copy it verbatim. Adapt the concepts to your specific context.
             """
             ctx.deps.inspiration_count += 1
             insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=parent_selection_top_k))
@@ -621,7 +621,9 @@ class EvoWorker:
             """Call this tool to list the installed packages in the execution environment."""
             ctx.deps.list_package_count += 1
             pkg_names = [name for name in sorted(dist.metadata["Name"] for dist in importlib.metadata.distributions())]
-            return "Installed packages:\n" + "\n".join(pkg_names)
+            out_str = "Installed packages:\n" + "\n".join(pkg_names)
+            out_str += "Evaluate whether how each package can help you achieve a novel solution that meets the minimum score requirement."
+            return out_str
 
         @evo_explore.tool
         def install_package(ctx: RunContext[ExploreContext], package_name: str) -> str:

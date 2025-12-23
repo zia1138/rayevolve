@@ -1,4 +1,4 @@
-# rayevolve
+# rayevolve <a href="https://github.com/zia1138/rayevolve"><img src="rayevolve.png" align="right" height="150" alt="rayevolve github" /></a>
 Experimental project for LLM guided algorithm design and evolution built on ray.
 Based on [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 

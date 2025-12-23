@@ -35,4 +35,4 @@ evo_config:
   init_program_path: "src/examples/circle_packing/initial.py"
   job_type: "slurm_conda"
 
-exp_name: "rayevolve_circle_packing"
+exp_name: "rayevolve_circle_packing_scipy"

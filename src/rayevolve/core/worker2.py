@@ -282,7 +282,7 @@ class EvoWorker:
         )[0]
 
         if mode == "exploit":
-            self.agent_exploit(current_gen, probs.exploit_top_k, probs.explore_top_k)
+            self.agent_exploit(current_gen, probs.exploit_top_k)
         else:
             self.agent_explore(current_gen, probs.explore_top_k, probs.explore_performance_floor)
 
@@ -327,7 +327,7 @@ class EvoWorker:
         exploit_prompt = exploit_template.format(code=evolve_block.inner_content, score=parent.combined_score)
 
         model = GoogleModel('gemini-2.5-flash')
-        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})
 
         def submit(ctx: RunContext[ExploitContext], program: str) -> None:
             """
@@ -485,7 +485,7 @@ class EvoWorker:
                                                 floor_score=floor_score)
 
         model = GoogleModel('gemini-2.5-flash')
-        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":-1})
+        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})
         package_expert = Agent(model, model_settings=settings, system_prompt=self.evo_config.task_sys_msg)
 
         async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:

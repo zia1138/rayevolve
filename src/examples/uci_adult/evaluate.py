@@ -10,7 +10,6 @@ from typing import Tuple, Optional, List, Dict, Any
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from examples.uci_adult.initial import X_val_2
 from rayevolve.core import run_rayevolve_eval
 
 
@@ -57,6 +56,9 @@ def aggregate_train_and_classify(
 
     return metrics
 
+def no_kwargs(run_index: int) -> Dict[str, Any]:
+    """Provides keyword arguments for circle packing runs (none needed)."""
+    return {}
 
 def main(program_path: str, results_dir: str):
     """Runs the circle packing evaluation using rayevolve.eval."""
@@ -79,6 +81,7 @@ def main(program_path: str, results_dir: str):
         num_runs=num_experiment_runs,
         validate_fn=validate_prediction,
         aggregate_metrics_fn=_aggregator_with_context,
+        get_experiment_kwargs=no_kwargs,
     )
 
     if correct:

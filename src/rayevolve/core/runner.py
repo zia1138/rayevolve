@@ -202,7 +202,7 @@ class EvolutionRunner:
         gen = EvoGen.remote()  # generation counter
 
         all_refs = []
-        num_workers = 11
+        num_workers = 1
         batch_size = 1
         delay_between_batches = 0  # 1 minute in seconds
 

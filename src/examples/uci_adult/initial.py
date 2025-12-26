@@ -59,8 +59,5 @@ def train_and_classify():
     # Return validation features and predictions
     return X_val_2, y_val2_proba
 
-if __name__ == "__main__":
-    # Run training/prediction
-    X_val_2, y_val2_proba = train_and_classify()
 
  

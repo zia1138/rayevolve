@@ -43,12 +43,12 @@ def save_json_results(
     correct_file = os.path.join(results_dir, "correct.json")
     with open(correct_file, "w") as f:
         json.dump(correct_payload, f, indent=4)
-    print(f"Correctness and error status saved to {correct_file}")
+    #print(f"Correctness and error status saved to {correct_file}")
 
     metrics_file = os.path.join(results_dir, "metrics.json")
     with open(metrics_file, "w") as f:
         json.dump(metrics, f, indent=4)
-    print(f"Metrics saved to {metrics_file}")
+    #print(f"Metrics saved to {metrics_file}")
 
 
 def run_rayevolve_eval(
@@ -136,9 +136,9 @@ def run_rayevolve_eval(
                             all_validation_errors_list.append(validation_err_msg)
                 else:
                     num_valid_runs += 1
-            print(
-                f"Run {i + 1}/{num_runs} completed in {end_time - start_time:.2f} seconds"
-            )
+            #print(
+            #    f"Run {i + 1}/{num_runs} completed in {end_time - start_time:.2f} seconds"
+            #)
 
         metrics: Dict[str, Any]
         if aggregate_metrics_fn:

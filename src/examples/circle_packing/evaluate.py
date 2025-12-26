@@ -124,9 +124,7 @@ def aggregate_circle_packing_metrics(
             radii=radii,
             reported_sum=reported_sum,
         )
-        print(f"Detailed packing data saved to {extra_file}")
     except Exception as e:
-        print(f"Error saving extra.npz: {e}")
         metrics["extra_npz_save_error"] = str(e)
 
     return metrics
@@ -134,8 +132,6 @@ def aggregate_circle_packing_metrics(
 
 def main(program_path: str, results_dir: str):
     """Runs the circle packing evaluation using rayevolve.eval."""
-    print(f"Evaluating program: {program_path}")
-    print(f"Saving results to: {results_dir}")
     os.makedirs(results_dir, exist_ok=True)
 
     num_experiment_runs = 1
@@ -155,19 +151,6 @@ def main(program_path: str, results_dir: str):
         validate_fn=adapted_validate_packing,
         aggregate_metrics_fn=_aggregator_with_context,
     )
-
-    if correct:
-        print("Evaluation and Validation completed successfully.")
-    else:
-        print(f"Evaluation or Validation failed: {error_msg}")
-
-    print("Metrics:")
-    for key, value in metrics.items():
-        if isinstance(value, str) and len(value) > 100:
-            print(f"  {key}: <string_too_long_to_display>")
-        else:
-            print(f"  {key}: {value}")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

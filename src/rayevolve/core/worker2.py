@@ -187,14 +187,9 @@ class EvoWorker:
             verbose=verbose,
         )
 
-        if self.evo_config.language == "cuda":
-            self.lang_ext = "cu"
-        elif self.evo_config.language == "cpp":
-            self.lang_ext = "cpp"
-        elif self.evo_config.language == "python":
+        # Currently limited to python.
+        if self.evo_config.language == "python":
             self.lang_ext = "py"
-        elif self.evo_config.language == "rust":
-            self.lang_ext = "rs"
         else:
             msg = f"Language {self.evo_config.language} not supported"
             raise ValueError(msg)
@@ -380,7 +375,7 @@ class EvoWorker:
             retries=3,
             model_settings=settings)
 
-        @evo_exploit.tool(retries = 3)
+        @evo_exploit.tool
         def run_experiment(ctx: RunContext[ExploitContext], program: str, change: str) -> str:
             """
             Call this tool with an improved program that you want to evaluate. It will return
@@ -426,6 +421,34 @@ class EvoWorker:
             clear_results_dir(results_dir)
             return out_str
 
+        @evo_exploit.tool
+        def probe_code(ctx: RunContext[ExploitContext], probe_code: str) -> str:
+            """Call this tool to run arbitrary code snippets for debugging and information gathering."""
+            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
+            start_time = time.time()
+            job_id = self.scheduler.submit_async(exec_fname, results_dir)
+            results = self.scheduler.get_job_results(job_id, results_dir)
+            rtime = time.time() - start_time
+
+            out_str = ""
+            if results.get("correct", False):
+                out_str += "The probe code executed correctly.\n"
+            else:
+                out_str += "The probe code did not execute correctly.\n"
+                out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
+        
+            out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
+            out_str += "Here is the standard output of the probe code:\n"
+            out_str += "```"
+            out_str += results["stdout_log"] + "\n"
+            out_str += "```\n"
+            out_str += "Here is the standard error of the probe code:\n"
+            out_str += "```"
+            out_str += results["stderr_log"] + "\n"
+            out_str += "```\n"
+            # NOTE: This is an issue for any concurrency in this agent.
+            clear_results_dir(results_dir)
+            return out_str              
 
         try:
             exploit_ctx = ExploitContext(evolve_block=evolve_block, 
@@ -446,7 +469,6 @@ class EvoWorker:
         evolve_block = extract_evolve_block(parent.code)
         floor_score = parent.combined_score * explore_performance_floor
         explore_template = textwrap.dedent("""
-            ### MISSION
             The code below has achieved a score of **{score}**. 
             Your goal is to produce a dramatically different solution that still works correctly and
             achieves a score of **greater than {floor_score}**.

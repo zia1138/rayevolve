@@ -1,0 +1,29 @@
+evaluate_function:
+  _target_: examples.uci_adult.evaluate.main
+  program_path: ???
+  results_dir: ???
+
+distributed_job_config:
+  _target_: rayevolve.launch.SlurmCondaJobConfig
+  modules:
+  - "cuda/12.4"
+  - "cudnn/8.9.7"
+  - "hpcx/2.20"
+  eval_program_path: "src/rayevolve/eval_hydra.py"
+  conda_env: "rayevolve"
+  time: "00:10:00" 
+  cpus: 1
+  gpus: 0
+  mem: "8G"
+
+evo_config:
+  task_sys_msg: |
+    You are an expert data scientist working on a classification dataset.
+    Your goal to improve the the validation ROC-AUC performance of the classifier.
+    You can can change data pre-processing, data filtering, feature engineering, or models etc.
+    Be creative to achieve the best performance.
+  language: "python"
+  init_program_path: "src/examples/uci_adult/initial.py"
+  job_type: "slurm_conda"
+
+exp_name: "rayevolve_uci_adult"

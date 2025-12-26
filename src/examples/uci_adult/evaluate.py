@@ -28,6 +28,8 @@ def validate_prediction(
     X_val, y_val = run_output
     msg = "X_val shape: {}, y_val shape: {}".format(X_val.shape, y_val.shape)
     
+    # TODO: Need to add more validation checks here.
+
     return True, msg
 
 
@@ -57,13 +59,11 @@ def aggregate_train_and_classify(
     return metrics
 
 def no_kwargs(run_index: int) -> Dict[str, Any]:
-    """Provides keyword arguments for circle packing runs (none needed)."""
+    """Provides keyword arguments for runs (none needed)."""
     return {}
 
 def main(program_path: str, results_dir: str):
-    """Runs the circle packing evaluation using rayevolve.eval."""
-    print(f"Evaluating program: {program_path}")
-    print(f"Saving results to: {results_dir}")
+    """Runs the evaluation using rayevolve.eval."""
     os.makedirs(results_dir, exist_ok=True)
 
     num_experiment_runs = 1
@@ -84,22 +84,10 @@ def main(program_path: str, results_dir: str):
         get_experiment_kwargs=no_kwargs,
     )
 
-    if correct:
-        print("Evaluation and Validation completed successfully.")
-    else:
-        print(f"Evaluation or Validation failed: {error_msg}")
-
-    print("Metrics:")
-    for key, value in metrics.items():
-        if isinstance(value, str) and len(value) > 100:
-            print(f"  {key}: <string_too_long_to_display>")
-        else:
-            print(f"  {key}: {value}")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="data set fittingevaluator using rayevolve.eval"
+        description="data set fitting evaluator using rayevolve.eval"
     )
     parser.add_argument(
         "--program_path",

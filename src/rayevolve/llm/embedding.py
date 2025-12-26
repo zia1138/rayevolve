@@ -1,6 +1,6 @@
 import os
 import openai
-import google.generativeai as genai
+import google.genai as genai
 import pandas as pd
 from typing import Union, List, Optional, Tuple
 import numpy as np

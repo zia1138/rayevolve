@@ -59,9 +59,9 @@ if __name__ == "__main__":
     cfg = load_hydra_config(args.results_dir, max_parent_depth=2)
     cfg.evaluate_function.program_path = os.path.abspath(args.program_path)
     cfg.evaluate_function.results_dir = os.path.abspath(args.results_dir)
-    print(os.getcwd())
-    print("Launching evaluation of function:")
-    print(omegaconf.OmegaConf.to_yaml(cfg.evaluate_function))
+    # print(os.getcwd())
+    # print("Launching evaluation of function:")
+    # print(omegaconf.OmegaConf.to_yaml(cfg.evaluate_function))
 
     # import & run under the target directory
     with chdir_to_target(cfg.evaluate_function):

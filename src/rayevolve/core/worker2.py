@@ -49,6 +49,8 @@ class ExploitContext(BaseModel):
     evolve_block: EvolveBlock
     parent_score: float
     inference_start: float
+    probe_count: int = 0
+    run_experiment_count: int = 0
 
 class ExploreContext(BaseModel):
     evolve_block: EvolveBlock
@@ -307,7 +309,9 @@ class EvoWorker:
             3. **Experiment:** Write the code to implement your idea.
                You are encouraged to add print statements to help you debug and understand the code behavior.
             4. **Evaluate:** Use `run_experiment` to get any output and the score.
-             
+            5. **Probe:** Use the `probe` tool to gather information and debug, but keep the same
+                inputs and outputs as the original program so it still runs correctly.
+                                           
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to identify new approaches for improvement.
             - **Efficiency:** You have a maximum of 5 attempts.
@@ -386,6 +390,12 @@ class EvoWorker:
             Returns:
                 str: A human-readable report of the results of the experiment.
             """
+            if ctx.deps.run_experiment_count > 0:
+                if ctx.deps.probe_count == 0:
+                    return "You must use `probe` to gather information and debug at least once before running another experiment." 
+
+            ctx.deps.run_experiment_count += 1
+
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
             start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
@@ -428,23 +438,24 @@ class EvoWorker:
             return out_str
 
         @evo_exploit.tool
-        def probe_code(ctx: RunContext[ExploitContext], probe_code: str) -> str:
-            """Call this tool to run arbitrary code snippets for debugging and information gathering."""
+        def probe(ctx: RunContext[ExploitContext], probe_code: str, intent: str) -> str:
+            """
+            Write code that adds print statements or other debugging information to help you gather
+            information on the behavior of the program and the internal data structures. 
+            The probe code must maintain the same inputs and outputs as the original program 
+            so that it still runs correctly.
+            Args:
+                probe_code: The program modified with print statements for information gathering and debugging.
+                intent: The purpose or goal of running the probe code (such as inspecting variables, checking logic flow, etc.).
+            Returns:
+                str: The standard output and error produced by running the probe code.
+            """
+            ctx.deps.probe_count += 1
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
-            start_time = time.time()
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
-            rtime = time.time() - start_time
 
             out_str = ""
-            if results.get("correct", False):
-                out_str += "The probe code executed correctly.\n"
-            else:
-                out_str += "The probe code did not execute correctly.\n"
-                out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
-        
-            out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
-
             stdout = results.get("stdout_log", "").strip()
             stderr = results.get("stderr_log", "").strip()        
             if stdout != "":

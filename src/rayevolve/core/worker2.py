@@ -409,14 +409,20 @@ class EvoWorker:
                 out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
-            out_str += "Here is the standard output of the program:\n"
-            out_str += "```"
-            out_str += results["stdout_log"] + "\n"
-            out_str += "```\n"
-            out_str += "Here is the standard error of the program:\n"
-            out_str += "```"
-            out_str += results["stderr_log"] + "\n"
-            out_str += "```\n"
+
+            stdout = results.get("stdout_log", "").strip()
+            stderr = results.get("stderr_log", "").strip()
+            if stdout != "":
+                out_str += "Here is the standard output of the program:\n"
+                out_str += "```"
+                out_str += stdout + "\n"
+                out_str += "```\n"
+            if stderr != "":
+                out_str += "Here is the standard error of the program:\n"
+                out_str += "```"
+                out_str += stderr + "\n"
+                out_str += "```\n"
+                
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)
             return out_str
@@ -438,14 +444,19 @@ class EvoWorker:
                 out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
-            out_str += "Here is the standard output of the probe code:\n"
-            out_str += "```"
-            out_str += results["stdout_log"] + "\n"
-            out_str += "```\n"
-            out_str += "Here is the standard error of the probe code:\n"
-            out_str += "```"
-            out_str += results["stderr_log"] + "\n"
-            out_str += "```\n"
+
+            stdout = results.get("stdout_log", "").strip()
+            stderr = results.get("stderr_log", "").strip()        
+            if stdout != "":
+                out_str += "Here is the standard output of the probe code:\n"
+                out_str += "```"
+                out_str += stdout + "\n"
+                out_str += "```\n"
+            if stderr != "":
+                out_str += "Here is the standard error of the probe code:\n"
+                out_str += "```"
+                out_str += stderr + "\n"
+                out_str += "```\n"
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)
             return out_str              
@@ -608,14 +619,19 @@ class EvoWorker:
                 out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
-            out_str += "Here is the standard output of the program:\n"
-            out_str += "```"
-            out_str += results.get("stdout_log", "") + "\n"
-            out_str += "```\n"
-            out_str += "Here is the standard error of the program:\n"
-            out_str += "```"
-            out_str += results.get("stderr_log", "") + "\n"
-            out_str += "```\n"
+            stdout = results.get("stdout_log", "").strip()
+            stderr = results.get("stderr_log", "").strip()
+
+            if stdout != "":
+                out_str += "Here is the standard output of the program:\n"
+                out_str += "```"
+                out_str += stdout + "\n"
+                out_str += "```\n"
+            if stderr != "":
+                out_str += "Here is the standard error of the program:\n"
+                out_str += "```"
+                out_str += stderr + "\n"
+                out_str += "```\n"
 
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)            

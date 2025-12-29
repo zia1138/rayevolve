@@ -49,8 +49,7 @@ class ExploitContext(BaseModel):
     evolve_block: EvolveBlock
     parent_score: float
     inference_start: float
-    probe_count: int = 0
-    run_experiment_count: int = 0
+    probe_needed: bool = False
 
 class ExploreContext(BaseModel):
     evolve_block: EvolveBlock
@@ -59,6 +58,7 @@ class ExploreContext(BaseModel):
     run_experiment_count: int = 0
     list_package_count: int = 0
     inspiration_count: int = 0
+    probe_needed: bool = False
 
 def clear_results_dir(results_dir: str) -> None:
     """
@@ -307,9 +307,9 @@ class EvoWorker:
             2. **Packages** Use any imported packages to help you implement your ideas for improving the score.
             2. **Innovate:** Focus on substantial algorithmic changes and rewrites that can lead to significant improvements.                            
             3. **Experiment:** Write the code to implement your idea.
-               You are encouraged to add print statements to help you debug and understand the code behavior.
-            4. **Evaluate:** Use `run_experiment` to get any output and the score.
-            5. **Probe:** Use the `probe` tool to gather information and debug, but keep the same
+            4. **Evaluate:** Use `run_experiment` to get any output and the score. 
+            5. **Probe:** If a `run_experiment` has been performed and the result doesn't improve the score,
+                use the `probe` tool to gather information and debug. When you use the `probe` tool keep the same
                 inputs and outputs as the original program so it still runs correctly.
                                            
             ### CONSTRAINTS
@@ -390,11 +390,9 @@ class EvoWorker:
             Returns:
                 str: A human-readable report of the results of the experiment.
             """
-            if ctx.deps.run_experiment_count > 0:
-                if ctx.deps.probe_count == 0:
-                    return "You must use `probe` to gather information and debug at least once before running another experiment." 
-
-            ctx.deps.run_experiment_count += 1
+            if ctx.deps.probe_needed == True:
+                return "You must use `probe` to gather information and debug at least once before running another experiment." 
+            ctx.deps.probe_needed = True
 
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
             start_time = time.time()
@@ -450,7 +448,7 @@ class EvoWorker:
             Returns:
                 str: The standard output and error produced by running the probe code.
             """
-            ctx.deps.probe_count += 1
+            ctx.deps.probe_needed = False
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
             job_id = self.scheduler.submit_async(exec_fname, results_dir)
             results = self.scheduler.get_job_results(job_id, results_dir)
@@ -494,7 +492,7 @@ class EvoWorker:
             The code below has achieved a score of **{score}**. 
             Your goal is to produce a dramatically different solution that still works correctly and
             achieves a score of **greater than {floor_score}**.
-            You should consider different types of substantive changes including use of external packages, 
+            You should apply different types of substantive changes including use of different external packages, 
             conceptual, algorithmic, changes to modularization, data flow, control flow, or architectural patterns, or changes in parameters
             and parameterization, etc.
            
@@ -504,10 +502,14 @@ class EvoWorker:
             ```
                                          
             ### PROTOCOL
-            You must propose a different solution and determine it is correct. You can submit 
-            your solution to `run_experiment` with a description of the changes you made to get feedback.
-            Identify helpful packages that will lead to creative solutions. You can use `list_packages` to see what is installed and
-            import these packages in your code. You can also use `install_package` to install new packages.                                           
+            1. **Experiment:** You must propose a different solution and determine it is correct. You can submit 
+               your solution to `run_experiment` with a description of the changes you made to get feedback.
+            2. **Packages:** Identify helpful packages that will lead to creative solutions. You can use `list_packages` to see what is installed and
+               import these packages in your code. You can also use `install_package` to install new packages.                                           
+            3. **Probe:** Use the `probe` tool to gather information and debug. When you use the `probe` tool keep the same
+               inputs and outputs as the original program so it still runs correctly.
+            4. **Inspiration:** Use `get_inspiration` to identify useful concepts from other successful programs
+               that can help you come up with novel approaches.
              
             ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to help you identify a novel approach.
@@ -517,10 +519,12 @@ class EvoWorker:
             - **Originality:** If you use `get_inspiration`, do NOT copy the code verbatim. Adapt the **concepts** to your specific context. 
                                            
             ### COMPLETION
-            - Make sure you perform research using the `list_packages` tool to identify useful pacakges that help you find novel solutions.
-            - Make sure you perform research using the `get_inspiration` tool to identify useful concepts from other successful programs.    
-            - Make sure you perform research using the `consult_package_expert` tool to identify useful packages for your novel program.
-            - Once you achieve a score greater than {floor_score}, use the `submit` tool to submit your novel program.
+            - Make sure you perform research using the `list_packages` tool to identify and import useful packages that help you find novel solutions.
+            - Make sure you perform research using the `get_inspiration` tool to identify and borrow useful concepts from other successful programs.    
+            - Make sure you perform research using the `consult_package_expert` tool to identify useful packages for your novel program that
+              you should install and import to obtain novel solutions.
+             - If you think your program is novel with significant changes, 
+               and it achieves a score greater than {floor_score}, use the `submit` tool to submit your novel program.
             - If you cannot find a correct, novel program that achieves the minimum score, after 5 attempts explain why and give up.
         """)
 
@@ -604,7 +608,11 @@ class EvoWorker:
                 if ctx.deps.inspiration_count == 0:
                     return "You must use `get_inspiration` to identify useful concepts from other successful programs at least once before running another experiment."
 
+            if ctx.deps.probe_needed == True:
+                return "You must use `probe` to gather information and debug at least once before running another experiment."
+            
             ctx.deps.run_experiment_count += 1
+            ctx.deps.probe_needed = True
 
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             Path(exec_fname).write_text(evo_program, "utf-8")
@@ -698,6 +706,41 @@ class EvoWorker:
             expert_prompt = expert_template.format(code=novel_program, floor_score=floor_score)
             response = await package_expert.run(expert_prompt)
             return response.output
+
+        @evo_explore.tool
+        def probe(ctx: RunContext[ExploreContext], probe_code: str, intent: str) -> str:
+            """
+            Write code that adds print statements or other debugging information to help you gather
+            information on the behavior of the program and the internal data structures. 
+            The probe code must maintain the same inputs and outputs as the original program 
+            so that it still runs correctly.
+            Args:
+                probe_code: The program modified with print statements for information gathering and debugging.
+                intent: The purpose or goal of running the probe code (such as inspecting variables, checking logic flow, etc.).
+            Returns:
+                str: The standard output and error produced by running the probe code.
+            """
+            ctx.deps.probe_needed = False
+            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
+            job_id = self.scheduler.submit_async(exec_fname, results_dir)
+            results = self.scheduler.get_job_results(job_id, results_dir)
+
+            out_str = ""
+            stdout = results.get("stdout_log", "").strip()
+            stderr = results.get("stderr_log", "").strip()        
+            if stdout != "":
+                out_str += "Here is the standard output of the probe code:\n"
+                out_str += "```"
+                out_str += stdout + "\n"
+                out_str += "```\n"
+            if stderr != "":
+                out_str += "Here is the standard error of the probe code:\n"
+                out_str += "```"
+                out_str += stderr + "\n"
+                out_str += "```\n"
+            # NOTE: This is an issue for any concurrency in this agent.
+            clear_results_dir(results_dir)
+            return out_str              
 
         try:
             explore_ctx = ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start)

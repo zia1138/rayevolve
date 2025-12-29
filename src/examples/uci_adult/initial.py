@@ -2,40 +2,22 @@
 # EVOLVE-BLOCK-START
 
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.compose import ColumnTransformer
-from sklearn.compose import make_column_selector as selector
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.pipeline import Pipeline
-
+import numpy as np
 
 def preprocess_train_and_predict(X_train: pd.DataFrame, y_train: pd.DataFrame, X_val: pd.DataFrame):
-    X_train2 = X_train.dropna()
-    y_train2 = y_train.loc[X_train2.index]
-    X_val2 = X_val.dropna()
-    
-    # Ensure labels are DataFrame, then take first column as 1D series
-    if isinstance(y_train2, pd.Series):
-        y_train2 = y_train2.to_frame()
-    y_vec = y_train2.iloc[:, 0]
+    """Return X_val and random guesses for y_val with matching row count.
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("cat", OneHotEncoder(handle_unknown="ignore"), selector(dtype_include=["object", "category"])),
-            ("num", StandardScaler(with_mean=True), selector(dtype_include=["number"]))
-        ]
-    )
+    This modification ignores training and produces random probabilities for the
+    positive class, preserving the output shape and index.
+    """
+    X_val2 = X_val.copy()
 
-    model = Pipeline(steps=[
-        ("preprocess", preprocessor),
-        ("model", LogisticRegression(max_iter=500))
-    ])
+    # Generate random probabilities (0.0 - 1.0) for the positive class
+    rng = np.random.default_rng()
+    proba = rng.random(len(X_val2))
 
-    model.fit(X_train2, y_vec)
-    
-    # Assume binary labels (e.g., 0/1). Use probability of the positive class (max class).
-    proba = model.predict_proba(X_val2)
-    y_val2_proba = pd.DataFrame(proba[:, 1], index=X_val2.index, columns=["y_proba"]) 
+    # Match previous output format: single column DataFrame aligned to X_val index
+    y_val2_proba = pd.DataFrame(proba, index=X_val2.index, columns=["y_proba"])
 
     return X_val2, y_val2_proba
 

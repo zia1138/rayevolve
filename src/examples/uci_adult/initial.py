@@ -26,8 +26,7 @@ def preprocess_train_and_predict(X_train: pd.DataFrame, y_train: pd.DataFrame, X
 
 
 def train_and_classify():
-    """Trains a classifier on the UCI Adult dataset and evaluates on validation set.
-
+    """ Trains a model and predicts on validation data.
     Returns:
         Tuple (X_val: pd.DataFrame, y_val: pd.DataFrame)
     """

@@ -52,14 +52,19 @@ def aggregate_train_and_classify(
         .astype(int)
     )
 
-    FPR_TARGET = 0.001  # 0.1%
+    FPR_TARGET = 0.0005  # 0.05%
 
+    # Use the provided probability score (assumed positive-class proba)
     y_score = y_val2_proba.iloc[:, 0].to_numpy()
 
-    # Threshold from negative-class quantile
-    thr = float(np.quantile(y_score[y_true == 0], 1.0 - FPR_TARGET))
+    # Threshold from negative-class quantile; handle ties at the threshold
+    neg_scores = y_score[y_true == 0]
+    thr = float(np.quantile(neg_scores, 1.0 - FPR_TARGET))
+    # Move threshold to the next representable float to avoid classifying all values equal to thr as positive
+    thr = np.nextafter(thr, np.inf)
 
-    y_pred = (y_score >= thr).astype(int)
+    # Strictly greater-than to respect the targeted FPR under heavy class imbalance and tied scores
+    y_pred = (y_score > thr).astype(int)
 
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
     tpr = tp / (tp + fn) if (tp + fn) else 0.0

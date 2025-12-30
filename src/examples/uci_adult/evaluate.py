@@ -8,7 +8,7 @@ import numpy as np
 from typing import Tuple, Optional, List, Dict, Any
 
 import pandas as pd
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import confusion_matrix
 
 from rayevolve.core import run_rayevolve_eval
 
@@ -44,17 +44,35 @@ def aggregate_train_and_classify(
 
     X_val_2, y_val2_proba = results[0]
 
-    y_true_df = pd.read_csv("y_val.csv", index_col=0)
-    y_true_df = y_true_df.loc[X_val_2.index]
+    y_true = (
+        pd.read_csv("y_val.csv", index_col=0)
+        .loc[X_val_2.index]
+        .iloc[:, 0]
+        .to_numpy()
+        .astype(int)
+    )
 
-    # With binary numeric labels, compute AUC directly from probabilities
-    y_true = y_true_df.iloc[:, 0] if isinstance(y_true_df, pd.DataFrame) else y_true_df
-    y_score = y_val2_proba.iloc[:, 0]
-    auc = roc_auc_score(y_true, y_score)
+    FPR_TARGET = 0.05 # 5%
+
+    # Use the provided probability score (assumed positive-class proba)
+    y_score = y_val2_proba.iloc[:, 0].to_numpy()
+
+    # Threshold from negative-class quantile; handle ties at the threshold
+    neg_scores = y_score[y_true == 0]
+    thr = float(np.quantile(neg_scores, 1.0 - FPR_TARGET))
+    # Move threshold to the next representable float to avoid classifying all values equal to thr as positive
+    thr = np.nextafter(thr, np.inf)
+
+    # Strictly greater-than to respect the targeted FPR under heavy class imbalance and tied scores
+    y_pred = (y_score > thr).astype(int)
+
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    tpr = tp / (tp + fn) if (tp + fn) else 0.0
 
     metrics = {
-        "combined_score": float(auc),
+        "combined_score": float(tpr),
     }
+    
 
     return metrics
 

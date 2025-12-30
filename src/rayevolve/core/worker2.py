@@ -210,6 +210,10 @@ class EvoWorker:
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
 
+        # TODO: Modify so it also selects the model class to use.
+        # TODO: Modify so it makes a judgement on how much to allow lower scores in during exploration and doesn't use hard coded values.
+        # TODO: Include additional data such as gain in score per program and difficulty metrics to inform strategy.
+        # TODO: Make a separate ray actor to allow gradual adapatation based on time. 
         template = textwrap.dedent("""
         You are the Strategic Supervisor for an evolutionary optimization process.
         Your job is to tune the **Search Distribution** (Exploit vs. Explore) and **Beam Width** (Top-K) to match the 
@@ -263,7 +267,7 @@ class EvoWorker:
             - For general structural change: `explore_top_k` should be `min({total_programs}, 2 * {num_workers})`.
             - For radical architectural rewrite of elite code: `explore_top_k` should be `max(1, int({num_workers} * 0.1))` (small, focused pool of elites).
         """)
-        num_workers = 11
+        num_workers = 8 #TODO: Get rid of this hard coded value.
         total_programs = ray.get(self.db.total_programs.remote())
         prompt = template.format(best_score_table=best_score_table, num_workers=num_workers, total_programs=total_programs)
     
@@ -300,27 +304,22 @@ class EvoWorker:
             ```python                             
             {code}
             ```
- 
-            ### PROTOCOL
-            You must follow the **Scientific Method**:
             1. **Analyze:** Analyze the code above and come up with an approach to improve the score.
-            2. **Packages** Use any imported packages to help you implement your ideas for improving the score.
-            2. **Innovate:** Focus on substantial algorithmic changes and rewrites that can lead to significant improvements.                            
-            3. **Experiment:** Write the code to implement your idea.
-            4. **Evaluate:** Use `run_experiment` to get any output and the score. 
-            5. **Probe:** If a `run_experiment` has been performed and the result doesn't improve the score,
-                use the `probe` tool to gather information and debug. When you use the `probe` tool keep the same
-                inputs and outputs as the original program so it still runs correctly.
+            2. **Experiment:** Write the code to implement your idea.
+            3. **Evaluate:** Use `run_experiment` to get any output and the score. 
+            4. **Probe:** If a `run_experiment` has been performed and the result doesn't improve the score,
+                use the `probe` tool to perform a diagnostic probe: modify the program to emit targeted, 
+                low-cost evidence about why it is performing as it is so you identify ways to make improvements.
+            5. **Packages:** Use any imported packages to help you implement your ideas for improving the score.
                                            
-            ### CONSTRAINTS
             - **Persistence:** Do not give up. Use the feedback to identify new approaches for improvement.
-            - **Efficiency:** You have a maximum of 5 attempts.
-            - **Interface:** Make sure your rewritten program maintains the same inputs and outputs as the original program, 
-              but with an improved internal implementation.
+            - **Efficiency:** You have a maximum of 5 attempts where you should learn from the previous attempts.
+            - **Interface:** Make sure your program maintains the same inputs and outputs as the original program, 
+              but with an improved internal implementation. You may use modularization and helper functions as needed.
             
             ### COMPLETION
             - As soon as you achieve a score greater than {score}, submit your improved program using `submit`.
-            - If you cannot beat the score of the above code after 5 distinct hypotheses, give up and offer an explanation why.
+            - If you cannot beat the score of the above code after 5 distinct approaches, give up and offer an explanation why.
          """)
 
         exploit_prompt = exploit_template.format(code=evolve_block.inner_content, score=parent.combined_score)
@@ -331,6 +330,7 @@ class EvoWorker:
         def submit(ctx: RunContext[ExploitContext], program: str) -> None:
             """
             Submit an improved program when you achieve a higher score relative to the parent program.
+            Use this tool immediately when `run_experiment` shows that your program has a higher score.
             Args:
                 program: Code for the program that achieved a higher score.
             """            
@@ -391,7 +391,7 @@ class EvoWorker:
                 str: A human-readable report of the results of the experiment.
             """
             if ctx.deps.probe_needed == True:
-                return "You must use `probe` to gather information and debug at least once before running another experiment." 
+                return "You must use `probe` to gather information that will help you improve the program before another run_experiment." 
             ctx.deps.probe_needed = True
 
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
@@ -409,12 +409,12 @@ class EvoWorker:
                     if combined > ctx.deps.parent_score:
                         out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. You can now use `submit`.\n"
                     else:
-                        out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}. Analyze why it failed and propose a better approach.\n"
+                        out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}. Run the `probe` tool to help you analyze how you can improve the score.\n"
                 else:
                     out_str += "Something happened and the score was not available in results. Analyze why this happened and propose a fix.\n"
             else:
                 out_str += "The program did not execute correctly and did not produce a valid result. Analyze why this happened and propose a fix.\n"
-                out_str += "Here is the error: " + results.get("error", "Unknown Error") + "\n"
+                out_str += "Here is the error: `" + results.get("error", "Unknown Error") + "`\n"
         
             out_str += f"The evaluation took {rtime:.2f} seconds.\n"                
 
@@ -422,12 +422,12 @@ class EvoWorker:
             stderr = results.get("stderr_log", "").strip()
             if stdout != "":
                 out_str += "Here is the standard output of the program:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stdout + "\n"
                 out_str += "```\n"
             if stderr != "":
                 out_str += "Here is the standard error of the program:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stderr + "\n"
                 out_str += "```\n"
                 
@@ -438,15 +438,32 @@ class EvoWorker:
         @evo_exploit.tool
         def probe(ctx: RunContext[ExploitContext], probe_code: str, intent: str) -> str:
             """
-            Write code that adds print statements or other debugging information to help you gather
-            information on the behavior of the program and the internal data structures. 
-            The probe code must maintain the same inputs and outputs as the original program 
-            so that it still runs correctly.
+            Run a diagnostic probe: modify the program to emit targeted, low-cost evidence about why it is performing as it is.
+
+            A valid probe must aim to uncover actionable structure. Depending on the problem, this may include:
+            - surface structure and interfaces (e.g., variable/feature names, schema, types, units, ranges, missingness patterns, category cardinalities),
+            - relationships between quantities (e.g., associations/correlations, conditional behavior, interactions, regime changes),
+            - systematic failure modes or error clusters (e.g., which cases fail and how they differ),
+            - sensitivity to parameters or hyperparameters,
+            - bottlenecks or hotspots (time/memory/IO),
+            - surprising invariants, correlations, or inconsistencies.
+
+            Depth requirement:
+            - Do not stop at basic sanity checks. If the program uses structured data (tables/arrays/records),
+            the probe should go beyond shape/head printing and report at least one relationship-level finding
+            (e.g., a dependency, conditional pattern, subgroup difference, or anomaly) that motivates a concrete next change.
+
+            Probes must NOT be used primarily to check basic correctness (e.g., “does it run?” or only printing trivial summaries).
+            If correctness is necessary, it should be a minimal side-effect, not the goal.
+
+            The probe should add lightweight instrumentation (prints/summaries), run briefly, and quit early.
+            It should return observations that directly motivate a concrete next change.
+
             Args:
-                probe_code: The program modified with print statements for information gathering and debugging.
-                intent: The purpose or goal of running the probe code (such as inspecting variables, checking logic flow, etc.).
+                probe_code: Modified program with diagnostic instrumentation.
+                intent: The hypothesis/question being tested and what decision it informs.
             Returns:
-                str: The standard output and error produced by running the probe code.
+                stdout/stderr from running the probe.            
             """
             ctx.deps.probe_needed = False
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
@@ -458,14 +475,18 @@ class EvoWorker:
             stderr = results.get("stderr_log", "").strip()        
             if stdout != "":
                 out_str += "Here is the standard output of the probe code:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stdout + "\n"
                 out_str += "```\n"
             if stderr != "":
                 out_str += "Here is the standard error of the probe code:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stderr + "\n"
                 out_str += "```\n"
+            if out_str == "":
+                out_str = "The probe code did not produce any output."
+            else:
+                out_str += "Use this information to improve the program in your next attempt. If there was an error, rerun the `probe` tool.\n"
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)
             return out_str              
@@ -476,8 +497,9 @@ class EvoWorker:
                                          inference_start=inference_start)
             evo_exploit.run_sync(exploit_prompt, deps=exploit_ctx)
         except Exception as e:
-            print(f"Agent encountered an error: {e}")
-    
+            print(f"evo_exploit encountered an error: {e}")
+
+            
     def agent_explore(self, current_gen: int, parent_selection_top_k: int, explore_performance_floor: float):            
         exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
@@ -493,8 +515,8 @@ class EvoWorker:
             Your goal is to produce a dramatically different solution that still works correctly and
             achieves a score of **greater than {floor_score}**.
             You should apply different types of substantive changes including use of different external packages, 
-            conceptual, algorithmic, changes to modularization, data flow, control flow, or architectural patterns, or changes in parameters
-            and parameterization, etc.
+            conceptual, algorithmic, changes to modularization, data flow, control flow, 
+            or architectural patterns, or parameterization, etc.
            
             ### CODE
             ```python
@@ -506,8 +528,8 @@ class EvoWorker:
                your solution to `run_experiment` with a description of the changes you made to get feedback.
             2. **Packages:** Identify helpful packages that will lead to creative solutions. You can use `list_packages` to see what is installed and
                import these packages in your code. You can also use `install_package` to install new packages.                                           
-            3. **Probe:** Use the `probe` tool to gather information and debug. When you use the `probe` tool keep the same
-               inputs and outputs as the original program so it still runs correctly.
+            3. **Probe:** Use the `probe` tool to gather information about the behavior of a novel program
+               any data it uses, and its parameters that will help you find ways to produce a novel solution.
             4. **Inspiration:** Use `get_inspiration` to identify useful concepts from other successful programs
                that can help you come up with novel approaches.
              
@@ -522,9 +544,9 @@ class EvoWorker:
             - Make sure you perform research using the `list_packages` tool to identify and import useful packages that help you find novel solutions.
             - Make sure you perform research using the `get_inspiration` tool to identify and borrow useful concepts from other successful programs.    
             - Make sure you perform research using the `consult_package_expert` tool to identify useful packages for your novel program that
-              you should install and import to obtain novel solutions.
-             - If you think your program is novel with significant changes, 
-               and it achieves a score greater than {floor_score}, use the `submit` tool to submit your novel program.
+              you should install and import to obtain novel solutions.                                           
+            - Make sure you perform research using the `probe` tool to gather information that will help you find a novel and correct program.                                           
+            - If you have a novel program that achieves a score greater than {floor_score}, use the `submit` tool to submit your novel program immediately.
             - If you cannot find a correct, novel program that achieves the minimum score, after 5 attempts explain why and give up.
         """)
 
@@ -538,11 +560,12 @@ class EvoWorker:
 
         async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:
             """
-            Submit a proposed novel program.
+            Submit a proposed novel program that meets the minimum score. Run this tool immediately if
+            you have determined your program is novel and `run_experiment` shows it meets the minimum score.
             Args:
                 novel_program: A novel program that is dramatically different from the parent that 
                     still functions correctly.
-                change: A detailed description of the modification made (e.g. , conceptual, algorithmic change,
+                change: A detailed description of the modifications made (e.g. , conceptual, algorithmic change,
                     refactoring, control-flow alteration, etc.). 
             """
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
@@ -597,19 +620,21 @@ class EvoWorker:
 
             Args:
                 novel_program: A string containing a novel program that is dramatically different from the parent.
-                change: A detailed description of the change made (e.g., new package imports, algorithmic change,
-                    refactoring, control-flow alteration, etc.).                
+                change: A detailed description of the modifications made (e.g., new package imports, algorithmic changes,
+                    refactoring, control-flow alterations, etc.).                
             Returns:
                 str: feedback for the agent including correctness, score, stdout, and stderr.
             """
             if ctx.deps.run_experiment_count > 0:
                 if ctx.deps.list_package_count == 0:
                     return "You must use `list_packages` or `consult_package_expert` to research useful packages at least once before running another experiment."                
+                
+            if ctx.deps.run_experiment_count > 1:                
                 if ctx.deps.inspiration_count == 0:
                     return "You must use `get_inspiration` to identify useful concepts from other successful programs at least once before running another experiment."
 
             if ctx.deps.probe_needed == True:
-                return "You must use `probe` to gather information and debug at least once before running another experiment."
+                return "You must use `probe` to gather information that will help find a novel program before another run_experiment." 
             
             ctx.deps.run_experiment_count += 1
             ctx.deps.probe_needed = True
@@ -630,7 +655,7 @@ class EvoWorker:
                         out_str += f"It achieved a score of {combined}, which is an improvement over the minimum score of {ctx.deps.floor_score}.\n"
                     else:
                         out_str += f"It achieved a score of {combined}, which is NOT an improvement over the minimum score of {ctx.deps.floor_score}.\n"
-                        out_str += "Analyze why it failed to meet the performance floor and propose a better approach.\n"
+                        out_str += "Use the `probe` tool to help you analyze how you can improve the score.\n"
                 else:
                     out_str += "Something happened and the score was not available in results. Analyze why this happened and propose a fix.\n"
             else:
@@ -643,12 +668,12 @@ class EvoWorker:
 
             if stdout != "":
                 out_str += "Here is the standard output of the program:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stdout + "\n"
                 out_str += "```\n"
             if stderr != "":
                 out_str += "Here is the standard error of the program:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stderr + "\n"
                 out_str += "```\n"
 
@@ -708,17 +733,34 @@ class EvoWorker:
             return response.output
 
         @evo_explore.tool
-        def probe(ctx: RunContext[ExploreContext], probe_code: str, intent: str) -> str:
+        def probe(ctx: RunContext[ExploreContext], probe_code: str, intent: str) -> str:            
             """
-            Write code that adds print statements or other debugging information to help you gather
-            information on the behavior of the program and the internal data structures. 
-            The probe code must maintain the same inputs and outputs as the original program 
-            so that it still runs correctly.
+            Run a diagnostic probe: modify the program to emit targeted, low-cost evidence about why it is performing as it is.
+
+            A valid probe must aim to uncover actionable structure. Depending on the problem, this may include:
+            - surface structure and interfaces (e.g., variable/feature names, schema, types, units, ranges, missingness patterns, category cardinalities),
+            - relationships between quantities (e.g., associations/correlations, conditional behavior, interactions, regime changes),
+            - systematic failure modes or error clusters (e.g., which cases fail and how they differ),
+            - sensitivity to parameters or hyperparameters,
+            - bottlenecks or hotspots (time/memory/IO),
+            - surprising invariants, correlations, or inconsistencies.
+
+            Depth requirement:
+            - Do not stop at basic sanity checks. If the program uses structured data (tables/arrays/records),
+            the probe should go beyond shape/head printing and report at least one relationship-level finding
+            (e.g., a dependency, conditional pattern, subgroup difference, or anomaly) that motivates a concrete next change.
+
+            Probes must NOT be used primarily to check basic correctness (e.g., “does it run?” or only printing trivial summaries).
+            If correctness is necessary, it should be a minimal side-effect, not the goal.
+
+            The probe should add lightweight instrumentation (prints/summaries), run briefly, and quit early.
+            It should return observations that directly motivate a concrete next change.
+
             Args:
-                probe_code: The program modified with print statements for information gathering and debugging.
-                intent: The purpose or goal of running the probe code (such as inspecting variables, checking logic flow, etc.).
+                probe_code: Modified program with diagnostic instrumentation.
+                intent: The hypothesis/question being tested and what decision it informs.
             Returns:
-                str: The standard output and error produced by running the probe code.
+                stdout/stderr from running the probe.            
             """
             ctx.deps.probe_needed = False
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
@@ -730,14 +772,18 @@ class EvoWorker:
             stderr = results.get("stderr_log", "").strip()        
             if stdout != "":
                 out_str += "Here is the standard output of the probe code:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stdout + "\n"
                 out_str += "```\n"
             if stderr != "":
                 out_str += "Here is the standard error of the probe code:\n"
-                out_str += "```"
+                out_str += "```\n"
                 out_str += stderr + "\n"
                 out_str += "```\n"
+            if out_str == "":
+                out_str = "The probe code did not produce any output."
+            else:
+                out_str += "Use this information to help find a novel program in your next attempt. If there was an error, rerun the `probe` tool.\n"
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)
             return out_str              
@@ -746,6 +792,6 @@ class EvoWorker:
             explore_ctx = ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start)
             evo_explore.run_sync(explore_prompt, deps=explore_ctx)
         except Exception as e:
-            print(f"Agent encountered an error: {e}")
+            print(f"evo_explore encountered an error: {e}")
 
 

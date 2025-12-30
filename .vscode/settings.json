@@ -18,4 +18,5 @@
         ".logfire": true,
         "**/.pixi": true
     }
+    "rewrap.wrappingColumn": 120,
 }

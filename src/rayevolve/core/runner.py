@@ -119,6 +119,7 @@ class EvolutionRunner:
         )
         if evo_config.embedding_model is not None:
             print("ignoring embedding client " + evo_config.embedding_model)
+            evo_config.embedding_model = None
         #    self.embedding = EmbeddingClient(
         #        model_name=evo_config.embedding_model,
         #        verbose=verbose,

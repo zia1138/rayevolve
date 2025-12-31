@@ -289,7 +289,8 @@ class ProgramDatabase:
         self.conn: Optional[sqlite3.Connection] = None
         self.cursor: Optional[sqlite3.Cursor] = None
         self.read_only = read_only
-        self.embedding_client = EmbeddingClient(model_name=embedding_model)
+        print("ignoring embedding model in database init " + embedding_model)
+        self.embedding_client = None #EmbeddingClient(model_name=embedding_model)
 
         self.last_iteration: int = 0
         self.best_program_id: Optional[str] = None

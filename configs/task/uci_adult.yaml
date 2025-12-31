@@ -26,7 +26,7 @@ evo_config:
     feature. You should inspect the training data from multiple perspectives (e.g., feature distributions, associations
     between variables, conditional behavior, and subgroup statistics), form concrete hypotheses about data structure,
     and modify the feature representation accordingly through transformations, encodings, or constructed feature
-    combinations. Since evaluation depends only on performance at FPR ≤ 0.05, feature choices should prioritize
+    combinations. Since evaluation depends only on performance at FPR <= 0.05, feature choices should prioritize
     improving discrimination among the highest-confidence predictions, even if they do not improve overall ranking
     metrics. You should also analyze model confidence and error structure around this operating point, including
     high-confidence false positives, missed positives near the decision boundary, and score distributions within

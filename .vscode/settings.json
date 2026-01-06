@@ -17,6 +17,6 @@
         ".venv/**": true,      // or ".venv": true both are fine
         ".logfire": true,
         "**/.pixi": true
-    }
+    },
     "rewrap.wrappingColumn": 120,
 }

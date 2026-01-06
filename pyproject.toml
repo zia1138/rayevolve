@@ -37,6 +37,7 @@ dependencies = [
     "ipykernel>=7.1.0",
     "openml>=0.15.1",
     "google-genai>=1.56.0",
+    "nbconvert>=7.16.6",
 ]
 
 [project.scripts]

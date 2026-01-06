@@ -1,0 +1,41 @@
+evaluate_function:
+  _target_: examples.graphsearch.evaluate.main
+  program_path: ???
+  results_dir: ???
+
+distributed_job_config:
+  _target_: rayevolve.launch.SlurmCondaJobConfig
+  modules:
+  - "cuda/12.4"
+  - "cudnn/8.9.7"
+  - "hpcx/2.20"
+  eval_program_path: "src/rayevolve/eval_hydra.py"
+  conda_env: "rayevolve"
+  time: "00:10:00" 
+  cpus: 1
+  gpus: 0
+  mem: "8G"
+
+evo_config:
+  task_sys_msg: | 
+    You are designing a graph-search algorithm.
+
+    Task:
+    - Given a graph with a start node and a goal node, return a valid path if one exists.
+    - You may interact with the graph only by requesting the neighbors of a node and checking whether a node is the goal.
+
+    Evaluation:
+    - The solution is invalid if it fails to find a path on any instance.
+    - Cost is proportional to:
+      - the total number of neighbor queries,
+      - and the length of the returned path.
+    - Lower total cost is better, subject to full correctness.
+
+    Note:
+    - Some graphs contain hidden structural constraints that make locally optimal decisions misleading.
+    - Lightweight probing to infer structure from interaction may help reduce overall cost.
+  language: "python"
+  init_program_path: "src/examples/graphsearch/initial.py"
+  job_type: "slurm_conda"
+
+exp_name: "rayevolve_graphsearch"

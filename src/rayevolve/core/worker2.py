@@ -341,7 +341,7 @@ class EvoWorker:
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
             
-            if results.get("correct", False): 
+            if results['correct']['correct']: 
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.parent_score:
@@ -401,7 +401,7 @@ class EvoWorker:
             rtime = time.time() - start_time
 
             out_str = ""
-            if results.get("correct", False):
+            if results['correct']['correct']:
                 out_str += "The program executed correctly and produced a valid result.\n"
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
@@ -575,7 +575,7 @@ class EvoWorker:
             results = self.scheduler.get_job_results(job_id, results_dir)
             rtime = time.time() - start_time
 
-            if results.get("correct", False): 
+            if results['correct']['correct']: 
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.floor_score:
@@ -647,7 +647,7 @@ class EvoWorker:
             rtime = time.time() - start_time
 
             out_str = ""
-            if results.get("correct", False):
+            if results['correct']['correct']:
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"

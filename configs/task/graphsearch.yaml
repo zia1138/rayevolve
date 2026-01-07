@@ -34,6 +34,8 @@ evo_config:
     Note:
     - Some graphs contain hidden structural constraints that make locally optimal decisions misleading.
     - Lightweight probing to infer structure from interaction may help reduce overall cost.
+
+    NOTE: You are **not** allowed to redefine `SearchEnv` or change its interface. Assume external code passed you this dataclass.
   language: "python"
   init_program_path: "src/examples/graphsearch/initial.py"
   job_type: "slurm_conda"

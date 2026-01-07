@@ -16,7 +16,7 @@ app = typer.Typer(add_completion=False)
 
 class SearchEnv:
     def __init__(self, adj: Dict, start, goal):
-        self.adj = adj
+        self._adj = adj
         self.start = start
         self.goal = goal
         self.neighbors_iterated = 0
@@ -24,8 +24,11 @@ class SearchEnv:
     def is_goal(self, n) -> bool:
         return n == self.goal
 
+    def has_node(self, n) -> bool:
+        return n in self._adj
+
     def neighbors(self, n) -> Iterable:
-        for nbr in self.adj.get(n, []):
+        for nbr in self._adj.get(n, []):
             self.neighbors_iterated += 1
             yield nbr
 
@@ -46,19 +49,20 @@ def graph_search(env: SearchEnv) -> Optional[List]:
     start = env.start
     goal = env.goal
 
-    if start not in env.adj or goal not in env.adj:
+    if not env.has_node(start) or not env.has_node(goal):
         return None
 
     q = collections.deque([start])
     visited = {start}
     came_from = {}
-    goal_reached = (start == goal)
 
     while q:
         cur = q.popleft()
 
         if env.is_goal(cur):
-            goal_reached = True
+            if start == goal:
+                return [start]
+            return reconstruct_path(came_from, start, goal)
 
         for nbr in env.neighbors(cur):
             if nbr in visited:
@@ -67,11 +71,7 @@ def graph_search(env: SearchEnv) -> Optional[List]:
             came_from[nbr] = cur
             q.append(nbr)
 
-    if not goal_reached:
-        return None
-    if start == goal:
-        return [start]
-    return reconstruct_path(came_from, start, goal)
+    return None
 
 # EVOLVE-BLOCK-END
 
@@ -96,18 +96,22 @@ def score_instance(
     found: bool,
     neighbors_iterated: int,
     path_length: int,
-    fail_penalty: int = -100,
-    success_reward: int = 100,
-    w_neighbors: float = 1.0,
-    w_pathlen: float = 10.0,
+    max_neighbors: int,
+    max_path_length: int,
+    w_neighbors: float = 10.0,
+    w_pathlen: float = 1.0,
 ) -> float:
+    """
+    Non-negative score via a shifted cost:
+      score = max_cost - actual_cost, clipped at 0
+    Failure gets 0.
+    """
     if not found:
-        return float(fail_penalty)
-    return float(
-        success_reward
-        - w_neighbors * neighbors_iterated
-        - w_pathlen * path_length
-    )
+        return 0.0
+
+    actual_cost = w_neighbors * neighbors_iterated + w_pathlen * path_length
+    max_cost = w_neighbors * max_neighbors + w_pathlen * max_path_length
+    return max_cost - actual_cost
 
 
 # -------------------------
@@ -132,20 +136,28 @@ def evaluate_all_graphs(dataset_dir: str | Path = "./data") -> Dict:
         start = tuple(meta["start"])
         goal = tuple(meta["goal"])
 
+        # Evaluator-side adjacency (search code only sees SearchEnv)
         adj = {n: list(G.neighbors(n)) for n in G.nodes}
+
+        # Upper bounds for non-negative scoring
+        max_neighbors = sum(len(v) for v in adj.values())      # = 2|E| for undirected graphs
+        max_path_length = max(0, len(adj) - 1)                 # longest possible simple path
+
         env = SearchEnv(adj=adj, start=start, goal=goal)
-
         path = graph_search(env)
-        valid = is_valid_path(adj, start, goal, path)
 
+        valid = is_valid_path(adj, start, goal, path)
         if not valid:
             all_valid = False
 
         path_length = (len(path) - 1) if (path and valid) else 0
+
         total_score += score_instance(
             found=valid,
             neighbors_iterated=env.neighbors_iterated,
             path_length=path_length,
+            max_neighbors=max_neighbors,
+            max_path_length=max_path_length,
         )
 
     return {"total_score": total_score, "valid": all_valid}

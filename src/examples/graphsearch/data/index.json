@@ -1,0 +1,56 @@
+[
+  {
+    "name": "plain_0000",
+    "family": "plain_grid",
+    "graph": "graphs/plain_0000.pkl",
+    "meta": "metas/plain_0000.json",
+    "seed": 906691059,
+    "viz": "viz/plain_0000.png",
+    "graphml": null
+  },
+  {
+    "name": "plain_0001",
+    "family": "plain_grid",
+    "graph": "graphs/plain_0001.pkl",
+    "meta": "metas/plain_0001.json",
+    "seed": 413653999,
+    "viz": "viz/plain_0001.png",
+    "graphml": null
+  },
+  {
+    "name": "plain_0002",
+    "family": "plain_grid",
+    "graph": "graphs/plain_0002.pkl",
+    "meta": "metas/plain_0002.json",
+    "seed": 813847339,
+    "viz": "viz/plain_0002.png",
+    "graphml": null
+  },
+  {
+    "name": "gate_0000",
+    "family": "detour_gate",
+    "graph": "graphs/gate_0000.pkl",
+    "meta": "metas/gate_0000.json",
+    "seed": 955892128,
+    "viz": "viz/gate_0000.png",
+    "graphml": null
+  },
+  {
+    "name": "gate_0001",
+    "family": "detour_gate",
+    "graph": "graphs/gate_0001.pkl",
+    "meta": "metas/gate_0001.json",
+    "seed": 451585301,
+    "viz": "viz/gate_0001.png",
+    "graphml": null
+  },
+  {
+    "name": "gate_0002",
+    "family": "detour_gate",
+    "graph": "graphs/gate_0002.pkl",
+    "meta": "metas/gate_0002.json",
+    "seed": 43469773,
+    "viz": "viz/gate_0002.png",
+    "graphml": null
+  }
+]

@@ -49,6 +49,19 @@ Then hit the green arrow in the debug panel to attach and debug.
 This is inspired from https://github.com/ray-project/ray/issues/41953
 and https://code.visualstudio.com/docs/python/debugging#_debugging-by-attaching-over-a-network-connection
 
+# Running Command Line
+
+Running a variant/task.
+```bash
+ python -m rayevolve.launch_hydra variant@_global_=circle_packing_example
+ ```
+
+Running visualization using a sqlite database
+```bash
+python -m rayevolve.webui.visualization --db results/rayevolve_circle_packing/YYYY.MMM.DDTTTTTT_example/evolution_db.sqlite 
+```
+
+
 # TODO
 
 - [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement

@@ -19,22 +19,7 @@ import asyncio
 from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
 from .worker2 import EvoWorker, EvoGen
-#from .worker import EvoWorker, EvoGen
 from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
-from rayevolve.llm import (
-    LLMClient,
-    extract_between,
-    EmbeddingClient,
-    BanditBase,
-    AsymmetricUCB,
-)
-from rayevolve.edit import (
-    apply_diff_patch,
-    apply_full_patch,
-    summarize_diff,
-    redact_immutable,
-)
-from rayevolve.core.sampler import PromptSampler
 
 import debugpy
 FOLDER_PREFIX = "gen"
@@ -99,11 +84,8 @@ class EvolutionRunner:
 
         # Initialize database and scheduler
         db_config.db_path = str(db_path)
-        embedding_model_to_use = (
-            evo_config.embedding_model or "text-embedding-3-small"
-        )
         self.db = ProgramDatabase.remote(
-            config=db_config, embedding_model=embedding_model_to_use
+            config=db_config
         )
 
         self.scheduler = JobScheduler(
@@ -112,30 +94,6 @@ class EvolutionRunner:
             verbose=verbose,
         )
 
-        self.llm = LLMClient(
-            model_names=evo_config.llm_models,
-            **evo_config.llm_kwargs,
-            verbose=verbose,
-        )
-        if evo_config.embedding_model is not None:
-            print("ignoring embedding client " + evo_config.embedding_model)
-            self.embedding = None
-        #    self.embedding = EmbeddingClient(
-        #        model_name=evo_config.embedding_model,
-        #        verbose=verbose,
-        #    )
-        else:
-            self.embedding = None
-
-        # Initialize PromptSampler for handling LLM code prompts
-        self.prompt_sampler = PromptSampler(
-            task_sys_msg=evo_config.task_sys_msg,
-            language=evo_config.language,
-            patch_types=evo_config.patch_types,
-            patch_type_probs=evo_config.patch_type_probs,
-            use_text_feedback=evo_config.use_text_feedback,
-        )
-        
         # Initialize rich console for formatted output
         self.console = Console()
 
@@ -229,94 +187,6 @@ class EvolutionRunner:
         # Now wait for ALL workers to finish
         ray.get(all_refs)
 
-    
-    def generate_initial_program(self):
-        """Generate initial program with LLM, with retries."""
-        llm_kwargs = self.llm.get_kwargs()
-
-        sys_msg, user_msg = self.prompt_sampler.initial_program_prompt()
-        msg_history = []
-        total_costs = 0.0
-
-        for attempt in range(self.evo_config.max_patch_attempts):
-            response = self.llm.query(
-                msg=user_msg,
-                system_msg=sys_msg,
-                llm_kwargs=llm_kwargs,
-                msg_history=msg_history,
-            )
-            if response is None or response.content is None:
-                if self.verbose:
-                    logger.info(
-                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
-                        f"{self.evo_config.max_patch_attempts} "
-                        "FAILURE. Error: LLM response content was None."
-                    )
-                if attempt < self.evo_config.max_patch_attempts - 1:
-                    user_msg = (
-                        "The previous response was empty. Please try again "
-                        "and provide the full code."
-                    )
-                    if response and response.new_msg_history:
-                        msg_history = response.new_msg_history
-                    continue
-                else:
-                    break
-
-            total_costs += response.cost or 0
-            initial_code = extract_between(
-                response.content,
-                f"```{self.evo_config.language}",
-                "```",
-                False,
-            )
-
-            if initial_code:
-                patch_name = extract_between(
-                    response.content, "<NAME>", "</NAME>", False
-                )
-                patch_description = extract_between(
-                    response.content, "<DESCRIPTION>", "</DESCRIPTION>", False
-                )
-                if self.evo_config.language == "python":
-                    comment_char = "#"
-                else:
-                    comment_char = "//"
-
-                initial_code = (
-                    f"{comment_char} EVOLVE-BLOCK-START\n"
-                    f"{initial_code}\n"
-                    f"{comment_char} EVOLVE-BLOCK-END\n"
-                )
-
-                if self.verbose:
-                    logger.info(
-                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
-                        f"{self.evo_config.max_patch_attempts} "
-                        "SUCCESS."
-                    )
-                return initial_code, patch_name, patch_description, total_costs
-            else:  # code extraction failed
-                if self.verbose:
-                    logger.info(
-                        f"  INITIAL PROGRAM ATTEMPT {attempt + 1}/"
-                        f"{self.evo_config.max_patch_attempts} "
-                        "FAILURE. Error: Could not extract code from response."
-                    )
-                if attempt < self.evo_config.max_patch_attempts - 1:
-                    user_msg = (
-                        "Could not extract code from your last response. "
-                        "Please make sure to enclose the code in "
-                        "`<CODE>`...`</CODE>` tags."
-                    )
-                    msg_history = response.new_msg_history
-                else:  # last attempt
-                    break
-
-        raise ValueError(
-            "LLM failed to generate a valid initial program after "
-            f"{self.evo_config.max_patch_attempts} attempts."
-        )
 
     def _run_generation_0(self):
         """Setup and run generation 0 to initialize the database."""
@@ -331,38 +201,23 @@ class EvolutionRunner:
         patch_description = "Initial program from file."
         patch_type = "init"
 
-        if self.evo_config.init_program_path:
-            if self.verbose:
-                logger.info(
-                    f"Copying initial program from {self.evo_config.init_program_path}"
-                )
-            shutil.copy(self.evo_config.init_program_path, exec_fname)
-        else:
-            if self.verbose:
-                logger.info(
-                    "`init_program_path` not provided, "
-                    "generating initial program with LLM..."
-                )
-            initial_code, patch_name, patch_description, api_costs = (
-                self.generate_initial_program()
+        if self.verbose:
+            logger.info(
+                f"Copying initial program from {self.evo_config.init_program_path}"
             )
-            with open(exec_fname, "w", encoding="utf-8") as f:
-                f.write(initial_code)
-
-            if self.verbose:
-                logger.info(f"Initial program generated and saved to {exec_fname}")
+        shutil.copy(self.evo_config.init_program_path, exec_fname)
 
         # Run the evaluation synchronously
         results, rtime = self.scheduler.run(exec_fname, results_dir)
 
-        code_embedding, e_cost = self.get_code_embedding(exec_fname)
+        code_embedding, e_cost = [], 0.0
 
         # Read the evaluated code for database insertion
         try:
             evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
         except Exception as e:
             logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
-            evaluaruted_code = ""
+            evaluated_code = ""
 
         correct_val = False
         metrics_val = {}
@@ -449,41 +304,3 @@ class EvolutionRunner:
                 f"id {best_program.id[:6]}... "
                 f"Copied to {best_dir}"
             )
-
-    def get_code_embedding(self, exec_fname: str) -> tuple[List[float], float]:
-        """Get the embedding of the code."""
-        # Read the evaluated code
-        try:
-            evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
-            evaluated_code = ""
-        if evaluated_code != "":
-            # Get the embedding of the initial program
-            try:
-                if self.embedding is not None:
-                    redacted_code = redact_immutable(evaluated_code, no_state=True)
-                    if self.verbose:
-                        logger.debug(
-                            "=> EMBED: Code length - "
-                            f"Original: {len(evaluated_code)} - "
-                            f"Redacted: {len(redacted_code)}"
-                        )
-
-                    embedding_result, e_cost = self.embedding.get_embedding(
-                        redacted_code
-                    )
-                else:
-                    if self.verbose:
-                        logger.debug("=> EMBED: No embedding model configured.")
-                    embedding_result = []
-                    e_cost = 0.0
-                code_embedding = cast(List[float], embedding_result)
-            except Exception as e:
-                logger.warning(f"Could not embed code for job {exec_fname}. Error: {e}")
-                code_embedding = []
-                e_cost = 0.0
-        else:
-            code_embedding = []
-            e_cost = 0.0
-        return code_embedding, e_cost

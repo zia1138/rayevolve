@@ -3,7 +3,6 @@ from typing import List, Optional, Union
 from subprocess import Popen
 
 from rayevolve.launch import ProcessWithLogging
-from rayevolve.llm import BanditBase
 
 FOLDER_PREFIX = "gen"
 
@@ -19,7 +18,7 @@ class EvolutionConfig:
     job_type: str = "local"
     language: str = "python"
     llm_models: List[str] = field(default_factory=lambda: ["azure-gpt-4.1-mini"])
-    llm_dynamic_selection: Optional[Union[str, BanditBase]] = None
+    llm_dynamic_selection: Optional[str] = None
     llm_dynamic_selection_kwargs: dict = field(default_factory=lambda: {})
     llm_kwargs: dict = field(default_factory=lambda: {})
     meta_rec_interval: Optional[int] = None

@@ -14,7 +14,6 @@ from .parents import CombinedParentSelector
 from .inspirations import CombinedContextSelector
 from .islands import CombinedIslandManager
 from .display import DatabaseDisplay
-from rayevolve.llm.embedding import EmbeddingClient
 
 import debugpy
 
@@ -284,14 +283,12 @@ class ProgramDatabase:
     populations, and an archive of elites.
     """
 
-    def __init__(self, config: DatabaseConfig,embedding_model: str = "text-embedding-3-small", read_only: bool = False):
+    def __init__(self, config: DatabaseConfig, read_only: bool = False):
         self.config = config
         self.conn: Optional[sqlite3.Connection] = None
         self.cursor: Optional[sqlite3.Cursor] = None
         self.read_only = read_only
-        print("ignoring embedding model in database init " + embedding_model)
-        self.embedding_client = None #EmbeddingClient(model_name=embedding_model)
-
+    
         self.last_iteration: int = 0
         self.best_program_id: Optional[str] = None
         self.beam_search_parent_id: Optional[str] = None
@@ -588,11 +585,11 @@ class ProgramDatabase:
 
         # Embedding is expected to be provided by the user.
         # Ensure program.embedding is a list, even if empty.
-        if not isinstance(program.embedding, list):
-            raise TypeError(
-                f"Program {program.id} embedding must be a list, "
-                f"got {type(program.embedding)}"
-            )
+        #if not isinstance(program.embedding, list):
+        #    raise TypeError(
+        #        f"Program {program.id} embedding must be a list, "
+        #        f"got {type(program.embedding)}"
+        #    )
 
         # Pre-serialize all JSON data once
         public_metrics_json = json.dumps(program.public_metrics or {})
@@ -690,7 +687,7 @@ class ProgramDatabase:
         self._update_best_program(program)
 
         # Recompute embeddings and clusters for all programs
-        self._recompute_embeddings_and_clusters()
+        # self._recompute_embeddings_and_clusters() # Removed to avoid dependencies.
 
         # Update generation tracking
         if program.generation > self.last_iteration:
@@ -1811,185 +1808,6 @@ class ProgramDatabase:
         except Exception as e:
             logger.error(f"Error in get_most_similar_program_thread_safe: {e}")
             return None
-        finally:
-            if conn:
-                conn.close()
-
-    @db_retry()
-    def _recompute_embeddings_and_clusters(self, num_clusters: int = 4):
-        if self.read_only:
-            return
-        if not self.cursor or not self.conn:
-            raise ConnectionError("DB not connected.")
-
-        self.cursor.execute(
-            "SELECT id, embedding FROM programs "
-            "WHERE embedding IS NOT NULL AND embedding != '[]'"
-        )
-        rows = self.cursor.fetchall()
-
-        if len(rows) < num_clusters:
-            logger.info(
-                f"Not enough programs with embeddings ({len(rows)}) to "
-                f"perform clustering. Need at least {num_clusters}."
-            )
-            return
-
-        program_ids = [row["id"] for row in rows]
-        embeddings = [json.loads(row["embedding"]) for row in rows]
-
-        # Use EmbeddingClient for dim reduction and clustering
-        try:
-            logger.info(
-                "Recomputing PCA-reduced embedding features for %s programs.",
-                len(program_ids),
-            )
-            reduced_2d = self.embedding_client.get_dim_reduction(
-                embeddings, method="pca", dims=2
-            )
-            reduced_3d = self.embedding_client.get_dim_reduction(
-                embeddings, method="pca", dims=3
-            )
-            cluster_ids = self.embedding_client.get_embedding_clusters(
-                embeddings, num_clusters=num_clusters
-            )
-        except Exception as e:
-            logger.error(f"Failed to recompute embedding features: {e}")
-            return
-
-        # Update all programs in a single transaction
-        self.conn.execute("BEGIN TRANSACTION")
-        try:
-            for i, program_id in enumerate(program_ids):
-                embedding_pca_2d_json = json.dumps(reduced_2d[i].tolist())
-                embedding_pca_3d_json = json.dumps(reduced_3d[i].tolist())
-                cluster_id = int(cluster_ids[i])
-
-                self.cursor.execute(
-                    """
-                    UPDATE programs
-                    SET embedding_pca_2d = ?,
-                        embedding_pca_3d = ?,
-                        embedding_cluster_id = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        embedding_pca_2d_json,
-                        embedding_pca_3d_json,
-                        cluster_id,
-                        program_id,
-                    ),
-                )
-            self.conn.commit()
-            logger.info(
-                "Successfully updated embedding features for %s programs.",
-                len(program_ids),
-            )
-        except Exception as e:
-            self.conn.rollback()
-            logger.error("Failed to update programs with new embedding features: %s", e)
-
-    @db_retry()
-    def _recompute_embeddings_and_clusters_thread_safe(self, num_clusters: int = 4):
-        """
-        Thread-safe version of embedding recomputation. Creates its own DB connection.
-        """
-        if self.read_only:
-            return
-
-        conn = None
-        try:
-            # Create a new connection for this thread
-            conn = sqlite3.connect(
-                self.config.db_path, check_same_thread=False, timeout=60.0
-            )
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-
-            cursor.execute(
-                "SELECT id, embedding FROM programs "
-                "WHERE embedding IS NOT NULL AND embedding != '[]'"
-            )
-            rows = cursor.fetchall()
-
-            if len(rows) < num_clusters:
-                if len(rows) > 0:
-                    logger.info(
-                        f"Not enough programs with embeddings ({len(rows)}) to "
-                        f"perform clustering. Need at least {num_clusters}."
-                    )
-                return
-
-            program_ids = [row["id"] for row in rows]
-            embeddings = [json.loads(row["embedding"]) for row in rows]
-
-            # Use EmbeddingClient for dim reduction and clustering
-            try:
-                logger.info(
-                    "Recomputing PCA-reduced embedding features for %s programs.",
-                    len(program_ids),
-                )
-
-                logger.info("Computing 2D PCA reduction...")
-                reduced_2d = self.embedding_client.get_dim_reduction(
-                    embeddings, method="pca", dims=2
-                )
-                logger.info("2D PCA reduction completed")
-
-                logger.info("Computing 3D PCA reduction...")
-                reduced_3d = self.embedding_client.get_dim_reduction(
-                    embeddings, method="pca", dims=3
-                )
-                logger.info("3D PCA reduction completed")
-
-                logger.info(f"Computing GMM clustering with {num_clusters} clusters...")
-                cluster_ids = self.embedding_client.get_embedding_clusters(
-                    embeddings, num_clusters=num_clusters
-                )
-                logger.info("GMM clustering completed")
-            except Exception as e:
-                logger.error(f"Failed to recompute embedding features: {e}")
-                return
-
-            # Update all programs in a single transaction
-            conn.execute("BEGIN TRANSACTION")
-            try:
-                for i, program_id in enumerate(program_ids):
-                    embedding_pca_2d_json = json.dumps(reduced_2d[i].tolist())
-                    embedding_pca_3d_json = json.dumps(reduced_3d[i].tolist())
-                    cluster_id = int(cluster_ids[i])
-
-                    cursor.execute(
-                        """
-                        UPDATE programs
-                        SET embedding_pca_2d = ?,
-                            embedding_pca_3d = ?,
-                            embedding_cluster_id = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            embedding_pca_2d_json,
-                            embedding_pca_3d_json,
-                            cluster_id,
-                            program_id,
-                        ),
-                    )
-                conn.commit()
-                logger.info(
-                    "Successfully updated embedding features for %s programs.",
-                    len(program_ids),
-                )
-            except Exception as e:
-                conn.rollback()
-                logger.error(
-                    "Failed to update programs with new embedding features: %s", e
-                )
-                raise  # Re-raise exception
-
-        except Exception as e:
-            logger.error(f"Thread-safe embedding recomputation failed: {e}")
-            raise  # Re-raise exception
-
         finally:
             if conn:
                 conn.close()

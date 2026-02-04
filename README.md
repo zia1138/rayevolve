@@ -11,6 +11,7 @@ You can visualize the progress as follows:
 
 # debugging in ray
 
+If the ray VSCode debugger doesn't work.
 Add the following in `~/.vscode/launch.json`. You can also use in the launch.json file
 the "Add Configuration..." button in the lower right. Then chose "Python Debugger" and
 "Remote Attach" Use local host and the matching port number for the code below. I think you 
@@ -63,6 +64,8 @@ python -m rayevolve.webui.visualization --db results/rayevolve_circle_packing/YY
 
 # TODO
 
+- [ ] clean up and improve config system, move away from hydra and use code as config
+- [ ] add better and more stable resume of a given run
 - [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement
 - [ ] add multiple model support (try to get to 2.635 on circle packing)
 - [ ] remove more unused ShinkaEvolve code

@@ -1,16 +1,12 @@
-from dataclasses import dataclass, field
-from typing import List, Optional, Union
-from subprocess import Popen
-
-from rayevolve.launch import ProcessWithLogging
+from dataclasses import dataclass, field, asdict
+from typing import List, Optional, Union, Dict, Any
 
 FOLDER_PREFIX = "gen"
 
-@dataclass
+@dataclass(frozen=True)
 class EvolutionConfig:
+    results_dir: Optional[str] = None
     task_sys_msg: Optional[str] = None
-    patch_types: List[str] = field(default_factory=lambda: ["diff"])
-    patch_type_probs: List[float] = field(default_factory=lambda: [1.0])
     num_generations: int = 10
     max_parallel_jobs: int = 2
     max_patch_resamples: int = 3
@@ -26,8 +22,6 @@ class EvolutionConfig:
     meta_llm_kwargs: dict = field(default_factory=lambda: {})
     meta_max_recommendations: int = 5
     embedding_model: Optional[str] = None
-    init_program_path: Optional[str] = "initial.py"
-    results_dir: Optional[str] = None
     max_novelty_attempts: int = 3
     code_embed_sim_threshold: float = 1.0
     novelty_llm_models: Optional[List[str]] = None
@@ -35,20 +29,59 @@ class EvolutionConfig:
     use_text_feedback: bool = False
 
 
-@dataclass
-class RunningJob:
-    """Represents a running job in the queue."""
+class DatabaseConfig:
+    num_islands: int = 4
+    archive_size: int = 100
 
-    job_id: Union[str, Popen, ProcessWithLogging]
-    exec_fname: str
-    results_dir: str
-    start_time: float
-    generation: int
-    parent_id: Optional[str]
-    archive_insp_ids: List[str]
-    top_k_insp_ids: List[str]
-    code_diff: Optional[str]
-    meta_patch_data: Optional[dict]
-    code_embedding: List[float] = field(default_factory=list)
-    embed_cost: float = 0.0
-    novelty_cost: float = 0.0
+    # Inspiration parameters
+    elite_selection_ratio: float = 0.3  # Prop of elites inspirations
+    num_archive_inspirations: int = 5  # No. inspiration programs
+    num_top_k_inspirations: int = 2  # No. top-k inspiration programs
+
+    # Island model/migration parameters
+    migration_interval: int = 10  # Migrate every N generations
+    migration_rate: float = 0.1  # Prop. of island pop. to migrate
+    island_elitism: bool = True  # Keep best prog on their islands
+    enforce_island_separation: bool = (
+        True  # Enforce full island separation for inspirations
+    )
+
+    # Parent selection parameters
+    parent_selection_strategy: str = (
+        "power_law"  # "weighted"/"power_law" / "beam_search"
+    )
+
+    # Power-law parent selection parameters
+    exploitation_alpha: float = 1.0  # 0=uniform, 1=power-law
+    exploitation_ratio: float = 0.2  # Chance to pick from archive
+
+    # Weighted tree parent selection parameters
+    parent_selection_lambda: float = 10.0  # >0 sharpness of sigmoid
+
+    # Beam search parent selection parameters
+    num_beams: int = 5
+
+    # Embedding model name
+    embedding_model: str = "text-embedding-3-small"
+
+@dataclass(frozen=True)
+class JobConfig:
+    eval_program_path: Optional[str] = "evaluate.py"
+    extra_cmd_args: Dict[str, Any] = field(default_factory=dict)
+    time: Optional[str] = None
+    conda_env: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation"""
+        job_to_dict = asdict(self)
+        return {k: v for k, v in job_to_dict.items() if v is not None}
+
+
+@dataclass(frozen=True)
+class RayEvolveConfig:
+    evo: EvolutionConfig
+    database: DatabaseConfig
+    job: JobConfig
+
+
+

@@ -14,6 +14,7 @@ from .parents import CombinedParentSelector
 from .inspirations import CombinedContextSelector
 from .islands import CombinedIslandManager
 from .display import DatabaseDisplay
+from rayevolve.core.common import DatabaseConfig
 
 import debugpy
 
@@ -79,44 +80,6 @@ def sample_with_powerlaw(items: list, alpha: float = 1.0) -> int:
 
     probs = probs / probs.sum()  # Normalize
     return np.random.choice(len(items), p=probs)
-
-@dataclass
-class DatabaseConfig:
-    db_path: str = "evolution_db.sqlite"
-    num_islands: int = 4
-    archive_size: int = 100
-
-    # Inspiration parameters
-    elite_selection_ratio: float = 0.3  # Prop of elites inspirations
-    num_archive_inspirations: int = 5  # No. inspiration programs
-    num_top_k_inspirations: int = 2  # No. top-k inspiration programs
-
-    # Island model/migration parameters
-    migration_interval: int = 10  # Migrate every N generations
-    migration_rate: float = 0.1  # Prop. of island pop. to migrate
-    island_elitism: bool = True  # Keep best prog on their islands
-    enforce_island_separation: bool = (
-        True  # Enforce full island separation for inspirations
-    )
-
-    # Parent selection parameters
-    parent_selection_strategy: str = (
-        "power_law"  # "weighted"/"power_law" / "beam_search"
-    )
-
-    # Power-law parent selection parameters
-    exploitation_alpha: float = 1.0  # 0=uniform, 1=power-law
-    exploitation_ratio: float = 0.2  # Chance to pick from archive
-
-    # Weighted tree parent selection parameters
-    parent_selection_lambda: float = 10.0  # >0 sharpness of sigmoid
-
-    # Beam search parent selection parameters
-    num_beams: int = 5
-
-    # Embedding model name
-    embedding_model: str = "text-embedding-3-small"
-
 
 def db_retry(max_retries=5, initial_delay=0.1, backoff_factor=2):
     """
@@ -283,7 +246,8 @@ class ProgramDatabase:
     populations, and an archive of elites.
     """
 
-    def __init__(self, config: DatabaseConfig, read_only: bool = False):
+    def __init__(self, db_path_str:str, config: DatabaseConfig, read_only: bool = False):
+        self.db_path_str = db_path_str
         self.config = config
         self.conn: Optional[sqlite3.Connection] = None
         self.cursor: Optional[sqlite3.Cursor] = None
@@ -298,45 +262,39 @@ class ProgramDatabase:
         # Initialize island manager (will be set after db connection)
         self.island_manager: Optional[CombinedIslandManager] = None
 
-        db_path_str = getattr(self.config, "db_path", None)
-
-        if db_path_str:
-            db_file = Path(db_path_str).resolve()
-            if not read_only:
-                # Robustness check for unclean shutdown with WAL
-                db_wal_file = Path(f"{db_file}-wal")
-                db_shm_file = Path(f"{db_file}-shm")
-                if (
-                    db_file.exists()
-                    and db_file.stat().st_size == 0
-                    and (db_wal_file.exists() or db_shm_file.exists())
-                ):
-                    logger.warning(
-                        f"Database file {db_file} is empty but WAL/SHM files "
-                        "exist. This may indicate an unclean shutdown. "
-                        "Removing WAL/SHM files to attempt recovery."
-                    )
-                    if db_wal_file.exists():
-                        db_wal_file.unlink()
-                    if db_shm_file.exists():
-                        db_shm_file.unlink()
-                db_file.parent.mkdir(parents=True, exist_ok=True)
-                self.conn = sqlite3.connect(str(db_file), timeout=30.0)
-                logger.debug(f"Connected to SQLite database: {db_file}")
-            else:
-                if not db_file.exists():
-                    raise FileNotFoundError(
-                        f"Database file not found for read-only connection: {db_file}"
-                    )
-                db_uri = f"file:{db_file}?mode=ro"
-                self.conn = sqlite3.connect(db_uri, uri=True, timeout=30.0)
-                logger.debug(
-                    "Connected to SQLite database in read-only mode: %s",
-                    db_file,
+        db_file = Path(db_path_str).resolve()
+        if not read_only:
+            # Robustness check for unclean shutdown with WAL
+            db_wal_file = Path(f"{db_file}-wal")
+            db_shm_file = Path(f"{db_file}-shm")
+            if (
+                db_file.exists()
+                and db_file.stat().st_size == 0
+                and (db_wal_file.exists() or db_shm_file.exists())
+            ):
+                logger.warning(
+                    f"Database file {db_file} is empty but WAL/SHM files "
+                    "exist. This may indicate an unclean shutdown. "
+                    "Removing WAL/SHM files to attempt recovery."
                 )
+                if db_wal_file.exists():
+                    db_wal_file.unlink()
+                if db_shm_file.exists():
+                    db_shm_file.unlink()
+            db_file.parent.mkdir(parents=True, exist_ok=True)
+            self.conn = sqlite3.connect(str(db_file), timeout=30.0)
+            logger.debug(f"Connected to SQLite database: {db_file}")
         else:
-            self.conn = sqlite3.connect(":memory:")
-            logger.info("Initialized in-memory SQLite database.")
+            if not db_file.exists():
+                raise FileNotFoundError(
+                    f"Database file not found for read-only connection: {db_file}"
+                )
+            db_uri = f"file:{db_file}?mode=ro"
+            self.conn = sqlite3.connect(db_uri, uri=True, timeout=30.0)
+            logger.debug(
+                "Connected to SQLite database in read-only mode: %s",
+                db_file,
+            )
 
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
@@ -1337,7 +1295,7 @@ class ProgramDatabase:
             return
 
         # Main purpose here is to save/commit metadata like last_iteration.
-        current_db_file_path_str = self.config.db_path
+        current_db_file_path_str = self.db_path_str
         if path and current_db_file_path_str:
             if Path(path).resolve() != Path(current_db_file_path_str).resolve():
                 logger.warning(

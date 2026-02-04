@@ -6,40 +6,22 @@ from .local_sync import submit as submit_local, monitor as monitor_local
 from .local_sync import ProcessWithLogging
 from rayevolve.utils import parse_time_to_seconds
 
+from rayevolve.core.common import JobConfig
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class JobConfig:
-    """Base job configuration"""
-
-    eval_program_path: Optional[str] = "evaluate.py"
-    extra_cmd_args: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation"""
-        job_to_dict = asdict(self)
-        return {k: v for k, v in job_to_dict.items() if v is not None}
-
-
-@dataclass
-class LocalJobConfig(JobConfig):
-    """Configuration for local jobs"""
-
-    time: Optional[str] = None
-    conda_env: Optional[str] = None
 
 
 class JobScheduler:
     def __init__(
         self,
         job_type: str,
-        config: LocalJobConfig,
+        config: JobConfig,
+        project_dir: str,
         verbose: bool = True,
-        max_workers: int = 4,
     ):
         self.job_type = job_type
         self.config = config
+        self.project_dir = project_dir
         self.verbose = verbose
 
         if self.job_type == "local":
@@ -54,7 +36,7 @@ class JobScheduler:
         # For local jobs, check if conda environment is specified
         if (
             self.job_type == "local"
-            and isinstance(self.config, LocalJobConfig)
+            and isinstance(self.config, JobConfig)
             and self.config.conda_env
         ):
             # Use conda run to execute in specific environment
@@ -92,8 +74,8 @@ class JobScheduler:
         start_time = time.time()
 
         if self.job_type == "local":
-            assert isinstance(self.config, LocalJobConfig)
-            job_id = submit_local(results_dir_t, cmd, verbose=self.verbose)
+            assert isinstance(self.config, JobConfig)
+            job_id = submit_local(results_dir_t, cmd, self.project_dir, verbose=self.verbose)
         else:
             raise ValueError(f"Unknown job type: {self.job_type}")
 
@@ -114,8 +96,8 @@ class JobScheduler:
         """Submit a job asynchronously and return the job ID or process."""
         cmd = self._build_command(exec_fname_t, results_dir_t)
         if self.job_type == "local":
-            assert isinstance(self.config, LocalJobConfig)
-            return submit_local(results_dir_t, cmd, verbose=self.verbose)
+            assert isinstance(self.config, JobConfig)
+            return submit_local(results_dir_t, cmd, self.project_dir, verbose=self.verbose)
         raise ValueError(f"Unknown job type: {self.job_type}")
 
     def get_job_results(

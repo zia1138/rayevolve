@@ -1,7 +1,6 @@
-from .dbase import ProgramDatabase, Program, DatabaseConfig
+from .dbase import ProgramDatabase, Program
 
 __all__ = [
     "ProgramDatabase",
     "Program",
-    "DatabaseConfig",
 ]

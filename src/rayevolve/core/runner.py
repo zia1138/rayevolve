@@ -1,4 +1,3 @@
-from asyncio import tasks
 import shutil
 import sys
 import uuid
@@ -15,19 +14,13 @@ from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
 import ray
-import asyncio
-from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
-from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
+from rayevolve.launch import JobScheduler, ProcessWithLogging
+from rayevolve.database import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
-from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
-
-import debugpy
-FOLDER_PREFIX = "gen"
-
+from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 
 # Set up logging
 logger = logging.getLogger(__name__)
-
 
 class EvolutionRunner:
     def __init__(
@@ -35,11 +28,13 @@ class EvolutionRunner:
         evo_config: EvolutionConfig,
         job_config: JobConfig,
         db_config: DatabaseConfig,
+        project_dir: str, 
         verbose: bool = False,
     ):
         self.evo_config = evo_config
         self.job_config = job_config
         self.db_config = db_config
+        self.project_dir = project_dir
         self.verbose = verbose
 
         if evo_config.results_dir is None:
@@ -78,19 +73,20 @@ class EvolutionRunner:
 
         # Check if we are resuming a run
         resuming_run = False
-        db_path = Path(f"{self.results_dir}/{db_config.db_path}")
+        db_path = Path(f"{self.results_dir}/evolution_db.sqlite")
         if self.evo_config.results_dir is not None and db_path.exists():
             resuming_run = True
 
         # Initialize database and scheduler
-        db_config.db_path = str(db_path)
         self.db = ProgramDatabase.remote(
+            db_path_str=str(db_path),
             config=db_config
         )
 
         self.scheduler = JobScheduler(
             job_type=evo_config.job_type,
             config=job_config,  # type: ignore
+            project_dir=self.project_dir,
             verbose=verbose,
         )
 
@@ -125,35 +121,8 @@ class EvolutionRunner:
                 "previously completed generations."
             )
             logger.info("=" * 80)
-            self._update_best_solution()
         else:
             self.completed_generations = 0
-
-        # Save experiment configuration to a YAML file
-        self._save_experiment_config(evo_config, job_config, db_config)
-
-    def _save_experiment_config(
-        self,
-        evo_config: EvolutionConfig,
-        job_config: JobConfig,
-        db_config: DatabaseConfig,
-    ) -> None:
-        """Save experiment configuration to a YAML file."""
-        config_data = {
-            "evolution_config": asdict(evo_config),
-            "job_config": asdict(job_config),
-            "database_config": asdict(db_config),
-            "timestamp": datetime.now().isoformat(),
-            "results_directory": str(self.results_dir),
-        }
-
-        config_path = Path(self.results_dir) / "experiment_config.yaml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with config_path.open("w", encoding="utf-8") as f:
-            yaml.dump(config_data, f, default_flow_style=False, indent=2)
-
-        logger.info(f"Experiment configuration saved to {config_path}")
 
     def run_ray(self):
         """Ray based evolution."""
@@ -162,7 +131,7 @@ class EvolutionRunner:
         gen = EvoGen.remote()  # generation counter
 
         all_refs = []
-        num_workers = 6
+        num_workers = 4
         batch_size = 1
         delay_between_batches = 0  # 1 minute in seconds
 
@@ -203,9 +172,9 @@ class EvolutionRunner:
 
         if self.verbose:
             logger.info(
-                f"Copying initial program from {self.evo_config.init_program_path}"
+                f"Copying initial program from {self.project_dir}/initial.py"
             )
-        shutil.copy(self.evo_config.init_program_path, exec_fname)
+        shutil.copy(f"{self.project_dir}/initial.py", exec_fname)
 
         # Run the evaluation synchronously
         results, rtime = self.scheduler.run(exec_fname, results_dir)
@@ -266,41 +235,5 @@ class EvolutionRunner:
 
         ray.get(self.db.add.remote(db_program, verbose=True))
         ray.get(self.db.save.remote())
-        self._update_best_solution()
-
-        #debugpy.listen(5678)
-        #debugpy.wait_for_client()
-        #debugpy.breakpoint()  
-
-    def _update_best_solution(self):
-        """Checks and updates the best program."""
-        best_programs = ray.get(self.db.get_top_programs.remote(n=1, correct_only=True))
-        #best_programs = self.db.get_top_programs(n=1, correct_only=True)
-        if not best_programs:
-            if self.verbose:
-                logger.debug(
-                    "No correct programs found yet, cannot determine best solution."
-                )
-            return
-
-        best_program = best_programs[0]
-
-        if best_program.id == self.best_program_id:
-            return  # No change
-
-        self.best_program_id = best_program.id
-
-        source_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{best_program.generation}"
-        best_dir = Path(self.results_dir) / "best"
-
-        if best_dir.exists():
-            shutil.rmtree(best_dir)
-
-        shutil.copytree(source_dir, best_dir)
-
-        if self.verbose:
-            logger.info(
-                f"New best program found: gen {best_program.generation}, "
-                f"id {best_program.id[:6]}... "
-                f"Copied to {best_dir}"
-            )
+    
+    

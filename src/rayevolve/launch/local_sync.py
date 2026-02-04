@@ -64,7 +64,7 @@ class ProcessWithLogging:
         pass
 
 
-def submit(log_dir: str, cmd: list[str], verbose: bool = True):
+def submit(log_dir: str, cmd: list[str], cwd: str,verbose: bool = True):
     """
     Submits a command for local execution (synchronously) and logs output.
 
@@ -98,6 +98,7 @@ def submit(log_dir: str, cmd: list[str], verbose: bool = True):
             text=True,
             env=env,
             timeout=10*60, # 10 minutes timeout    
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired as e:
         print("Timeout command: " + ' '.join(cmd))

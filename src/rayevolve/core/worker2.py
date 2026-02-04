@@ -7,9 +7,9 @@ from pathlib import Path
 from subprocess import Popen
 import ray
 
-from rayevolve.launch import JobScheduler, JobConfig, ProcessWithLogging
-from rayevolve.database import ProgramDatabase, DatabaseConfig, Program
-from .common import EvolutionConfig, RunningJob, FOLDER_PREFIX
+from rayevolve.launch import JobScheduler, ProcessWithLogging
+from rayevolve.database import ProgramDatabase, Program
+from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 
 import debugpy
 import textwrap

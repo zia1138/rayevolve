@@ -288,8 +288,6 @@ class EvoWorker:
             k=1,
         )[0]
 
-        # debugging
-        model = "exploit"
         if mode == "exploit":
             self.agent_exploit(current_gen, probs.exploit_top_k)
         else:

@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
 import ray
-from rayevolve.database import DatabaseConfig, ProgramDatabase
+from rayevolve.core.common import DatabaseConfig
+from rayevolve.database import ProgramDatabase
 
 # We'll use a simple text-to-PDF approach instead of complex dependencies
 WEASYPRINT_AVAILABLE = False
@@ -183,8 +184,8 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
         for i in range(max_retries):
             db = None
             try:
-                config = DatabaseConfig(db_path=abs_db_path)
-                db = ProgramDatabase.remote(config, read_only=True)
+                config = DatabaseConfig()
+                db = ProgramDatabase.remote(abs_db_path, config, read_only=True)
 
                 # Set WAL mode compatible settings for read-only connections
                 #if db.cursor:

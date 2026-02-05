@@ -233,6 +233,7 @@ def run(
         typer.echo(f"Failed to load DataFrame from: {db_path}")
         raise typer.Exit(code=1)
 
+    print(df)
     typer.echo(f"Loaded DataFrame with shape: {df.shape}")
     if output:
         try:

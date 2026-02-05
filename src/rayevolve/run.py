@@ -5,7 +5,7 @@ from pathlib import Path
 from dataclasses import asdict
 import ray
 
-from rayevolve.core import EvolutionRunner
+from rayevolve.core.runner import EvolutionRunner
 from rayevolve.core.common import RayEvolveConfig
 
 app = typer.Typer()
@@ -122,8 +122,8 @@ def run(
         return
 
     runtime_env = None
-    if ray_debug:
-        runtime_env = {"env_vars": {"RAY_DEBUG": "1", "RAY_DEBUG_POST_MORTEM": "1"}}
+    #if ray_debug:
+    runtime_env = {"env_vars": {"RAY_DEBUG": "1", "RAY_DEBUG_POST_MORTEM": "1"}}
 
     ray.init(runtime_env=runtime_env)
 

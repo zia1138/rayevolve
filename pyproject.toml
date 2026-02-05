@@ -20,7 +20,6 @@ dependencies = [
     "python-Levenshtein",
     "unidiff",
     "dill",
-    "hydra-core==1.3.2",
     "matplotlib",
     "networkx",
     "seaborn",

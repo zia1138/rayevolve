@@ -14,10 +14,10 @@ from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
 import ray
-from rayevolve.launch import JobScheduler, ProcessWithLogging
 from rayevolve.database import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
+from rayevolve.launch.scheduler import JobScheduler
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -37,11 +37,12 @@ class EvolutionRunner:
         self.project_dir = project_dir
         self.verbose = verbose
 
+        # Get full path of results directory.
         if evo_config.results_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.results_dir = f"results_{timestamp}"
+            self.results_dir = Path(f"results_{timestamp}").resolve()
         else:
-            self.results_dir = Path(evo_config.results_dir)
+            self.results_dir = Path(evo_config.results_dir).resolve()
 
         if self.verbose:
             # Create log file path in results directory
@@ -131,7 +132,7 @@ class EvolutionRunner:
         gen = EvoGen.remote()  # generation counter
 
         all_refs = []
-        num_workers = 4
+        num_workers = 1
         batch_size = 1
         delay_between_batches = 0  # 1 minute in seconds
 
@@ -143,6 +144,7 @@ class EvolutionRunner:
                     gen,
                     self.evo_config,
                     self.job_config,
+                    self.project_dir,
                     self.results_dir,
                     self.db,
                     self.verbose,
@@ -165,6 +167,7 @@ class EvolutionRunner:
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
+
         api_costs = 0.0
         patch_name = "initial_program"
         patch_description = "Initial program from file."
@@ -177,6 +180,7 @@ class EvolutionRunner:
         shutil.copy(f"{self.project_dir}/initial.py", exec_fname)
 
         # Run the evaluation synchronously
+        print(exec_fname, results_dir)
         results, rtime = self.scheduler.run(exec_fname, results_dir)
 
         code_embedding, e_cost = [], 0.0

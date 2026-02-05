@@ -1,5 +1,5 @@
-from __future__ import annotations
 import random
+import traceback
 import uuid
 import time
 import logging
@@ -7,7 +7,7 @@ from pathlib import Path
 from subprocess import Popen
 import ray
 
-from rayevolve.launch import JobScheduler, ProcessWithLogging
+from rayevolve.launch.scheduler import JobScheduler
 from rayevolve.database import ProgramDatabase, Program
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 
@@ -45,20 +45,7 @@ class StrategyProbs(BaseModel):
             raise ValueError("All probabilities are zero or negative")
         return {k: v / total for k, v in weights.items()}
 
-class ExploitContext(BaseModel):
-    evolve_block: EvolveBlock
-    parent_score: float
-    inference_start: float
-    probe_needed: bool = False
 
-class ExploreContext(BaseModel):
-    evolve_block: EvolveBlock
-    floor_score: float
-    inference_start: float
-    run_experiment_count: int = 0
-    list_package_count: int = 0
-    inspiration_count: int = 0
-    probe_needed: bool = False
 
 def clear_results_dir(results_dir: str) -> None:
     """
@@ -106,6 +93,22 @@ class EvolveBlock(BaseModel):
  
         # 4. Concatenate
         return f"{self.pre_block}{start_line}{formatted_inner}{self.end_marker_line}{self.post_block}"
+
+class ExploitContext(BaseModel):
+    evolve_block: EvolveBlock
+    parent_score: float
+    inference_start: float
+    probe_needed: bool = False
+
+class ExploreContext(BaseModel):
+    evolve_block: EvolveBlock
+    floor_score: float
+    inference_start: float
+    run_experiment_count: int = 0
+    list_package_count: int = 0
+    inspiration_count: int = 0
+    probe_needed: bool = False
+
 
 def extract_evolve_block(full_code: str) -> EvolveBlock:
     """
@@ -172,6 +175,7 @@ class EvoWorker:
                  gen: EvoGen,
                  evo_config: EvolutionConfig, 
                  job_config: JobConfig,
+                 project_dir: str,
                  results_dir: str,
                  db: ProgramDatabase, 
                  verbose: bool):
@@ -179,12 +183,14 @@ class EvoWorker:
         self.worker_id = worker_id
         self.gen = gen
         self.evo_config = evo_config
+        self.project_dir = project_dir
         self.results_dir = results_dir
         self.db = db
         self.verbose = verbose
 
         self.scheduler = JobScheduler(
             job_type=evo_config.job_type,
+            project_dir=self.project_dir,
             config=job_config,  # type: ignore
             verbose=verbose,
         )
@@ -282,6 +288,8 @@ class EvoWorker:
             k=1,
         )[0]
 
+        # debugging
+        model = "exploit"
         if mode == "exploit":
             self.agent_exploit(current_gen, probs.exploit_top_k)
         else:

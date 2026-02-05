@@ -4,10 +4,10 @@ Based on [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 
 
 You can run the circle packing example as follows:
-`python -m rayevolve.launch_hydra variant@_global_=circle_packing_example`
+`python -m rayevolve.run run src/examples/circle_packing`
 
 You can visualize the progress as follows:
-`python -m rayevolve.webui.visualization --db results/rayevolve_circle_packing/[current run]/evolution_db.sqlite`
+`python -m rayevolve.webui.visualization --db resultsXXX_YYY/evolution_db.sqlite`
 
 # debugging in ray
 
@@ -49,18 +49,6 @@ Then hit the green arrow in the debug panel to attach and debug.
 
 This is inspired from https://github.com/ray-project/ray/issues/41953
 and https://code.visualstudio.com/docs/python/debugging#_debugging-by-attaching-over-a-network-connection
-
-# Running Command Line
-
-Running a variant/task.
-```bash
- python -m rayevolve.launch_hydra variant@_global_=circle_packing_example
- ```
-
-Running visualization using a sqlite database
-```bash
-python -m rayevolve.webui.visualization --db results/rayevolve_circle_packing/YYYY.MMM.DDTTTTTT_example/evolution_db.sqlite 
-```
 
 # TODO
 

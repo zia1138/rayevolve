@@ -1,8 +1,0 @@
-defaults:
-  - override /database@_global_: island_circle
-  - override /evolution@_global_: circle_budget
-  - override /task@_global_: uci_adult
-  - override /cluster@_global_: local
-  - _self_
-
-variant_suffix: "_example"

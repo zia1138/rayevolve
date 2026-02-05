@@ -1,46 +1,30 @@
 [project]
 name = "rayevolve"
 version = "0.1.0"
-description = "Add your description here"
+description = "Experimental project for LLM guided algorithm design and evolution built on ray"
 readme = "README.md"
 authors = [
     { name = "Zia Khan", email = "zkhan@alumni.princeton.edu" }
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "openai",
     "numpy",
     "pandas",
-    "anthropic",
-    "requests",
-    "boto3",
-    "backoff",
-    "python-dotenv",
-    "instructor",
-    "python-Levenshtein",
-    "unidiff",
-    "dill",
     "matplotlib",
     "networkx",
-    "seaborn",
-    "moviepy",
     "scikit-learn",
-    "adjustText",
     "markdown",
-    "aiofiles",
     "ray[default]>=2.9.1",
     "debugpy>=1.8.0",
     "pydantic-ai>=1.23.0",
     "typer>=0.12.0",
-    "pyarrow>=17.0.0",
     "ipykernel>=7.1.0",
     "openml>=0.15.1",
-    "google-genai>=1.56.0",
     "nbconvert>=7.16.6",
 ]
 
 [project.scripts]
-rayevolve = "rayevolve:main"
+rayevolve = "rayevolve.run:app"
 
 [build-system]
 requires = ["uv_build>=0.9.6,<0.10.0"]

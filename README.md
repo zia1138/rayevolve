@@ -7,7 +7,10 @@ You can run the circle packing example as follows:
 `python -m rayevolve.run run src/examples/circle_packing`
 
 You can visualize the progress as follows:
-`python -m rayevolve.webui.visualization --db resultsXXX_YYY/evolution_db.sqlite`
+`python -m rayevolve.webui.visualization --db results_XXX_YYY/evolution_db.sqlite`
+
+Output program data into a parquet file:
+`python -m rayevolve.utils.load_df results_XXX_YYY/evolution_db.sqlite -o test.parquet`
 
 # debugging in ray
 

@@ -1,23 +1,8 @@
-evaluate_function:
-  _target_: examples.graphsearch.evaluate.main
-  program_path: ???
-  results_dir: ???
+# Import config classes from rayevolve.core
+from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, DatabaseConfig, JobConfig
+import textwrap
 
-distributed_job_config:
-  _target_: rayevolve.launch.SlurmCondaJobConfig
-  modules:
-  - "cuda/12.4"
-  - "cudnn/8.9.7"
-  - "hpcx/2.20"
-  eval_program_path: "src/rayevolve/eval_hydra.py"
-  conda_env: "rayevolve"
-  time: "00:10:00" 
-  cpus: 1
-  gpus: 0
-  mem: "8G"
-
-evo_config:
-  task_sys_msg: | 
+SYSTEM_MSG = textwrap.dedent("""\
     You are designing a graph-search algorithm.
 
     Task:
@@ -36,8 +21,18 @@ evo_config:
     - Lightweight probing to infer structure from interaction may help reduce overall cost.
 
     NOTE: You are **not** allowed to redefine `SearchEnv` or change its interface. Assume external code passed you this dataclass.
-  language: "python"
-  init_program_path: "src/examples/graphsearch/initial.py"
-  job_type: "slurm_conda"
+""")
 
-exp_name: "rayevolve_graphsearch"
+def list_profiles() -> list[str]:
+    """List available configuration profiles to display on CLI."""
+    return ["default"]
+
+def get_config(profile: str = "default") -> RayEvolveConfig:
+    """Get configuration for the given profile."""
+    if profile == "default":
+        return RayEvolveConfig(
+            evo=EvolutionConfig(task_sys_msg=SYSTEM_MSG),
+            database=DatabaseConfig(),
+            job=JobConfig(),
+        )
+    raise ValueError(f"Unknown profile: {profile}")

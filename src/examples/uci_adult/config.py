@@ -1,23 +1,8 @@
-evaluate_function:
-  _target_: examples.uci_adult.evaluate.main
-  program_path: ???
-  results_dir: ???
+# Import config classes from rayevolve.core
+from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, DatabaseConfig, JobConfig
+import textwrap
 
-distributed_job_config:
-  _target_: rayevolve.launch.SlurmCondaJobConfig
-  modules:
-  - "cuda/12.4"
-  - "cudnn/8.9.7"
-  - "hpcx/2.20"
-  eval_program_path: "src/rayevolve/eval_hydra.py"
-  conda_env: "rayevolve"
-  time: "00:10:00" 
-  cpus: 1
-  gpus: 0
-  mem: "8G"
-
-evo_config:
-  task_sys_msg: | 
+SYSTEM_MSG = textwrap.dedent("""\
     You are given a tabular dataset and a supervised prediction and feature engineering task. Your objective is to
     maximize true positive rate (TPR) at a false positive rate (FPR) of 0.05 on a held-out validation set by learning an
     effective set of features and a predictive model. Achieving strong performance requires explicitly discovering and
@@ -35,8 +20,18 @@ evo_config:
     domain-specific assumptions or predefined feature relationships are provided; all useful structure must be
     discovered empirically from the data. Evaluation is performed by a fixed external evaluator reporting TPR at FPR =
     0.05 on validation data. You do not have access to validation labels.
-  language: "python"
-  init_program_path: "src/examples/uci_adult/initial.py"
-  job_type: "slurm_conda"
+""")
 
-exp_name: "rayevolve_uci_adult"
+def list_profiles() -> list[str]:
+    """List available configuration profiles to display on CLI."""
+    return ["default"]
+
+def get_config(profile: str = "default") -> RayEvolveConfig:
+    """Get configuration for the given profile."""
+    if profile == "default":
+        return RayEvolveConfig(
+            evo=EvolutionConfig(task_sys_msg=SYSTEM_MSG),
+            database=DatabaseConfig(),
+            job=JobConfig(),
+        )
+    raise ValueError(f"Unknown profile: {profile}")

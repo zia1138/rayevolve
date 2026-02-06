@@ -14,7 +14,7 @@ from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from subprocess import Popen
 import ray
-from rayevolve.database import ProgramDatabase, Program
+from rayevolve.database.dbase import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 from rayevolve.launch.scheduler import JobScheduler
@@ -84,6 +84,7 @@ class EvolutionRunner:
             config=db_config
         )
 
+        # TODO: Move to better scheduelr here. This abstraction may not be needed.
         self.scheduler = JobScheduler(
             job_type=evo_config.job_type,
             config=job_config,  # type: ignore
@@ -94,6 +95,7 @@ class EvolutionRunner:
         # Initialize rich console for formatted output
         self.console = Console()
 
+        # TODO: Need to figure out how to handle languages in a cleaner way.
         if self.evo_config.language == "cuda":
             self.lang_ext = "cu"
         elif self.evo_config.language == "cpp":
@@ -106,29 +108,27 @@ class EvolutionRunner:
             msg = f"Language {self.evo_config.language} not supported"
             raise ValueError(msg)
 
-        # Queue for managing parallel jobs
-        self.best_program_id: Optional[str] = None
-        self.next_generation_to_submit = 0
-
+        # TODO: Resuming is not working correctly.
         if resuming_run:
-            self.completed_generations = ray.get(self.db.get_last_iteration.remote()) + 1
-            self.next_generation_to_submit = self.completed_generations
+            # ray.get(self.db.get_last_iteration.remote()) + 1
+            # TODO: Need to correctly handle generation ID during resume.
             logger.info("=" * 80)
             logger.info("RESUMING PREVIOUS EVOLUTION RUN")
             logger.info("=" * 80)
             logger.info(
                 f"Resuming evolution from: {self.results_dir}\n"
-                f"Found {self.completed_generations} "
+                f"Found {completed_generations} "
                 "previously completed generations."
             )
             logger.info("=" * 80)
-        else:
-            self.completed_generations = 0
+            raise NotImplementedError("Resuming runs is not currently supported. This will be implemented in a future update.")
+
 
     def run_ray(self):
         """Ray based evolution."""
         self._run_generation_0()
 
+        # TODO: Need to set generation counter here for correct resume.
         gen = EvoGen.remote()  # generation counter
 
         all_refs = []
@@ -180,10 +180,7 @@ class EvolutionRunner:
         shutil.copy(f"{self.project_dir}/initial.py", exec_fname)
 
         # Run the evaluation synchronously
-        print(exec_fname, results_dir)
         results, rtime = self.scheduler.run(exec_fname, results_dir)
-
-        code_embedding, e_cost = [], 0.0
 
         # Read the evaluated code for database insertion
         try:
@@ -217,7 +214,7 @@ class EvolutionRunner:
             archive_inspiration_ids=[],
             top_k_inspiration_ids=[],
             code_diff=None,
-            embedding=code_embedding,
+            embedding=[],
             correct=correct_val,
             combined_score=combined_score,
             public_metrics=public_metrics,
@@ -227,7 +224,7 @@ class EvolutionRunner:
                 "compute_time": rtime,
                 "inference_time": 0.0,  # No inference time for generation 0
                 "api_costs": api_costs,
-                "embed_cost": e_cost,
+                "embed_cost": 0.0,
                 "novelty_cost": 0.0,  # No novelty cost for generation 0
                 "patch_type": patch_type,
                 "patch_name": patch_name,
@@ -236,8 +233,6 @@ class EvolutionRunner:
                 "stderr_log": stderr_log,
             },
         )
-
         ray.get(self.db.add.remote(db_program, verbose=True))
-        ray.get(self.db.save.remote())
     
     

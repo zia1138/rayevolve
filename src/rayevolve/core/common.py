@@ -17,17 +17,8 @@ class EvolutionConfig:
     llm_dynamic_selection: Optional[str] = None
     llm_dynamic_selection_kwargs: dict = field(default_factory=lambda: {})
     llm_kwargs: dict = field(default_factory=lambda: {})
-    meta_rec_interval: Optional[int] = None
-    meta_llm_models: Optional[List[str]] = None
-    meta_llm_kwargs: dict = field(default_factory=lambda: {})
-    meta_max_recommendations: int = 5
     embedding_model: Optional[str] = None
-    max_novelty_attempts: int = 3
     code_embed_sim_threshold: float = 1.0
-    novelty_llm_models: Optional[List[str]] = None
-    novelty_llm_kwargs: dict = field(default_factory=lambda: {})
-    use_text_feedback: bool = False
-
 
 class DatabaseConfig:
     num_islands: int = 4

@@ -8,10 +8,9 @@ from subprocess import Popen
 import ray
 
 from rayevolve.launch.scheduler import JobScheduler
-from rayevolve.database import ProgramDatabase, Program
+from rayevolve.database.dbase import ProgramDatabase, Program
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 
-import debugpy
 import textwrap
 
 from pydantic import BaseModel, Field
@@ -202,13 +201,13 @@ class EvoWorker:
             msg = f"Language {self.evo_config.language} not supported"
             raise ValueError(msg)
 
+        # TODO: Need to handle logfire config more cleanly.
         logfire.configure(scrubbing=False)
         logfire.instrument_pydantic_ai()
 
     def run(self):
-        #debugpy.listen(5678)
-        #debugpy.wait_for_client()
-        #debugpy.breakpoint()                     
+        """Main agent loop for the worker."""
+        # TODO: Need to limit to some max number of generations or some stopping criterion.
         while True:
             current_gen = ray.get(self.gen.next.remote())
             self.run_strategy(current_gen)
@@ -276,7 +275,8 @@ class EvoWorker:
         num_workers = 8 #TODO: Get rid of this hard coded value.
         total_programs = ray.get(self.db.total_programs.remote())
         prompt = template.format(best_score_table=best_score_table, num_workers=num_workers, total_programs=total_programs)
-    
+
+        # TODO: Need to allow model to be configurable.     
         evo_strategist = Agent(model='google-gla:gemini-2.5-pro', system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
         result = evo_strategist.run_sync(prompt)
         probs: StrategyProbs = result.output
@@ -713,6 +713,7 @@ class EvoWorker:
             out_str += "Evaluate whether how each package can help you achieve a novel solution that meets the minimum score requirement."
             return out_str
 
+        # TODO: Need to handle the presence/absence of uv before running agent.
         @evo_explore.tool
         def install_package(ctx: RunContext[ExploreContext], package_name: str) -> str:
             """Call this tool to install a new package in the execution environment."""
@@ -799,5 +800,4 @@ class EvoWorker:
             evo_explore.run_sync(explore_prompt, deps=explore_ctx)
         except Exception as e:
             print(f"evo_explore encountered an error: {e}")
-
 

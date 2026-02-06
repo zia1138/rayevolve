@@ -27,7 +27,7 @@ from typing import Optional, Dict, Any, Tuple
 
 import ray
 from rayevolve.core.common import DatabaseConfig
-from rayevolve.database import ProgramDatabase
+from rayevolve.database.dbase import ProgramDatabase
 
 # We'll use a simple text-to-PDF approach instead of complex dependencies
 WEASYPRINT_AVAILABLE = False

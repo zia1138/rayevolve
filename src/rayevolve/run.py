@@ -7,6 +7,7 @@ import ray
 
 from rayevolve.core.runner import EvolutionRunner
 from rayevolve.core.common import RayEvolveConfig
+from rayevolve.core.common import validate
 
 app = typer.Typer()
 
@@ -32,15 +33,6 @@ def resolve_config_file(project: str) -> Path:
         raise typer.BadParameter(f"Expected config.py at: {config_file}")
 
     return config_file
-
-
-def validate(cfg: RayEvolveConfig) -> None:
-    # Minimal sanity checks; expand as needed
-    if cfg is None:
-        raise ValueError("Config is None")
-    for name in ("evo", "database", "job"):
-        if not hasattr(cfg, name) or getattr(cfg, name) is None:
-            raise ValueError(f"Config missing required section: {name}")
 
 
 DEFAULT_CONFIG_TEMPLATE = """\
@@ -86,6 +78,9 @@ def init_config(
 def profiles(
     project: str = typer.Argument(..., help="Path to project/data folder containing config.py"),
 ):
+    """
+    List the profile availabes in the config.py of the given project folder.
+    """
     config_file = resolve_config_file(project)
     ns = load_config_file(config_file)
 
@@ -103,8 +98,11 @@ def run(
     seed: int = typer.Option(0),
     run_name: str = typer.Option("run"),
     dry_run: bool = typer.Option(False),
-    ray_debug: bool = typer.Option(False, help="Enable Ray debug env vars"),
+    ray_debug: bool = typer.Option(True, help="Enable Ray debug env vars"),
 ):
+    """
+    Run rayevolve using the given profile from config.py in the specified project directory.
+    """
     config_file = resolve_config_file(project_dir)
     ns = load_config_file(config_file)
 
@@ -122,8 +120,8 @@ def run(
         return
 
     runtime_env = None
-    #if ray_debug:
-    runtime_env = {"env_vars": {"RAY_DEBUG": "1", "RAY_DEBUG_POST_MORTEM": "1"}}
+    if ray_debug:
+        runtime_env = {"env_vars": {"RAY_DEBUG": "1", "RAY_DEBUG_POST_MORTEM": "1"}}
 
     ray.init(runtime_env=runtime_env)
 

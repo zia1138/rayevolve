@@ -5,22 +5,28 @@ FOLDER_PREFIX = "gen"
 
 @dataclass(frozen=True)
 class EvolutionConfig:
+    """
+    Configuration for rayevolve run.
+
+    Attributes:
+        results_dir: Optional path to save results. If None, a timestamped folder will be created.
+        task_sys_msg: Optional system message for the task.
+        num_agent_workers: Number of agent workers to use.
+        max_generations: Maximum number of program generations to evolve.
+    """
     results_dir: Optional[str] = None
     task_sys_msg: Optional[str] = None
-    num_generations: int = 10
-    max_parallel_jobs: int = 2
-    max_patch_resamples: int = 3
-    max_patch_attempts: int = 5
-    job_type: str = "local"
+    num_agent_workers: int = 4
+    max_generations: int = 50
     language: str = "python"
     llm_models: List[str] = field(default_factory=lambda: ["azure-gpt-4.1-mini"])
     llm_dynamic_selection: Optional[str] = None
     llm_dynamic_selection_kwargs: dict = field(default_factory=lambda: {})
     llm_kwargs: dict = field(default_factory=lambda: {})
-    embedding_model: Optional[str] = None
-    code_embed_sim_threshold: float = 1.0
 
 class DatabaseConfig:
+    """Configuration for program database. ShinkEvolve code still needs to be
+       removed from this component."""
     num_islands: int = 4
     archive_size: int = 100
 
@@ -57,16 +63,17 @@ class DatabaseConfig:
 
 @dataclass(frozen=True)
 class JobConfig:
-    eval_program_path: Optional[str] = "evaluate.py"
+    """
+    Configuration for script execution.
+
+    Attributes:
+        timeout_sec: Optional timeout in seconds for script execution. If None, no timeout is applied
+        extra_cmd_args: Optional dictionary of extra command-line arguments to pass to the evaluation script.
+        conda_env: Optional name of the conda environment to use for execution. If None, the current environment is used.
+    """
     extra_cmd_args: Dict[str, Any] = field(default_factory=dict)
-    time: Optional[str] = None
+    timeout_sec: int = 10 * 60
     conda_env: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation"""
-        job_to_dict = asdict(self)
-        return {k: v for k, v in job_to_dict.items() if v is not None}
-
 
 @dataclass(frozen=True)
 class RayEvolveConfig:
@@ -75,4 +82,11 @@ class RayEvolveConfig:
     job: JobConfig
 
 
+def validate(cfg: RayEvolveConfig) -> None:
+    """Validate the RayEvolveConfig object."""
+    if cfg is None:
+        raise ValueError("Config is None")
+    for name in ("evo", "database", "job"):
+        if not hasattr(cfg, name) or getattr(cfg, name) is None:
+            raise ValueError(f"Config missing required section: {name}")
 

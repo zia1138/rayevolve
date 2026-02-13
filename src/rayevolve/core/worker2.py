@@ -188,7 +188,6 @@ class EvoWorker:
         self.verbose = verbose
 
         self.scheduler = JobScheduler(
-            job_type=evo_config.job_type,
             project_dir=self.project_dir,
             config=job_config,  # type: ignore
             verbose=verbose,
@@ -209,8 +208,11 @@ class EvoWorker:
         """Main agent loop for the worker."""
         # TODO: Need to limit to some max number of generations or some stopping criterion.
         while True:
-            current_gen = ray.get(self.gen.next.remote())
+            current_gen: int = ray.get(self.gen.next.remote())
             self.run_strategy(current_gen)
+            if current_gen >= self.evo_config.max_generations - 1:
+                logger.info(f"Worker {self.worker_id}: Reached max generations ({self.evo_config.max_generations}). Stopping evolution.")
+                break
             
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
@@ -342,10 +344,7 @@ class EvoWorker:
             """            
             evo_program = ctx.deps.evolve_block.reconstruct(program)
             Path(exec_fname).write_text(evo_program, "utf-8")
-            start_time = time.time()
-            job_id = self.scheduler.submit_async(exec_fname, results_dir)
-            results = self.scheduler.get_job_results(job_id, results_dir)
-            rtime = time.time() - start_time
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
             
             if results['correct']['correct']: 
                 combined = results.get("metrics", {}).get("combined_score")
@@ -401,10 +400,7 @@ class EvoWorker:
             ctx.deps.probe_needed = True
 
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
-            start_time = time.time()
-            job_id = self.scheduler.submit_async(exec_fname, results_dir)
-            results = self.scheduler.get_job_results(job_id, results_dir)
-            rtime = time.time() - start_time
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             out_str = ""
             if results['correct']['correct']:
@@ -473,8 +469,7 @@ class EvoWorker:
             """
             ctx.deps.probe_needed = False
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
-            job_id = self.scheduler.submit_async(exec_fname, results_dir)
-            results = self.scheduler.get_job_results(job_id, results_dir)
+            results, rtime = self.scheduler.run(exec_fname, results_dir)                    
 
             out_str = ""
             stdout = results.get("stdout_log", "").strip()
@@ -576,10 +571,7 @@ class EvoWorker:
             """
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             Path(exec_fname).write_text(evo_program, "utf-8")
-            start_time = time.time()
-            job_id = self.scheduler.submit_async(exec_fname, results_dir)
-            results = self.scheduler.get_job_results(job_id, results_dir)
-            rtime = time.time() - start_time
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             if results['correct']['correct']: 
                 combined = results.get("metrics", {}).get("combined_score")
@@ -647,10 +639,7 @@ class EvoWorker:
 
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             Path(exec_fname).write_text(evo_program, "utf-8")
-            start_time = time.time()
-            job_id = self.scheduler.submit_async(exec_fname, results_dir)
-            results = self.scheduler.get_job_results(job_id, results_dir)
-            rtime = time.time() - start_time
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             out_str = ""
             if results['correct']['correct']:
@@ -771,8 +760,7 @@ class EvoWorker:
             """
             ctx.deps.probe_needed = False
             Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
-            job_id = self.scheduler.submit_async(exec_fname, results_dir)
-            results = self.scheduler.get_job_results(job_id, results_dir)
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             out_str = ""
             stdout = results.get("stdout_log", "").strip()

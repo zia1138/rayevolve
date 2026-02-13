@@ -3,14 +3,34 @@ Experimental project for LLM guided algorithm design and evolution built on ray.
 Based on [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 
 
-You can run the circle packing example as follows:
-`python -m rayevolve.run run src/examples/circle_packing`
+You can run the circle packing example usign the configs in `examples/circlepacking/config.py` with the `default` profile as follows:
+```bash
+rayevolve run examples/circle_packing
+```
+Use `rayevovle --help` to get all of the command line parameters. 
 
 You can visualize the progress as follows:
 `python -m rayevolve.webui.visualization --db results_XXX_YYY/evolution_db.sqlite`
 
 Output program data into a parquet file:
 `python -m rayevolve.utils.load_df results_XXX_YYY/evolution_db.sqlite -o test.parquet`
+
+We use a a config-as-code system where you use can initialzie data classes in your projects `config.py` to modify any parameters. See the 
+file [src/rayevolve/core/common.py](src/rayevolve/core/common.py)
+all the configuration parameters along with a function to validate these
+parameters. 
+
+# TODO
+
+- [ ] clean up and improve config system, move away from hydra and use code as config
+- [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement
+- [ ] add multiple model support (try to get to 2.635 on circle packing)
+- [ ] remove more unused ShinkaEvolve code
+- [ ] dynamically optimizing and updating the system prompt based on where the system is getting stuck
+- [ ] add a metaoptimizer to get the system unstuck and adds strategic guidance 
+- [ ] for exploit/explore improve probe functionality, not clear it is always useful
+- [ ] handle runtime timeouts correctly (took too long to run)
+- [ ] identify codebaes and projects with good evaluators + benchmarks to migrate into tool
 
 # debugging in ray
 
@@ -53,15 +73,3 @@ Then hit the green arrow in the debug panel to attach and debug.
 This is inspired from https://github.com/ray-project/ray/issues/41953
 and https://code.visualstudio.com/docs/python/debugging#_debugging-by-attaching-over-a-network-connection
 
-# TODO
-
-- [ ] clean up and improve config system, move away from hydra and use code as config
-- [ ] add better and more stable resume of a given run
-- [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement
-- [ ] add multiple model support (try to get to 2.635 on circle packing)
-- [ ] remove more unused ShinkaEvolve code
-- [ ] dynamically optimizing and updating the system prompt based on where the system is getting stuck
-- [ ] add a metaoptimizer to get the system unstuck and adds strategic guidance 
-- [ ] for exploit/explore improve probe functionality, not clear it is always useful
-- [ ] handle runtime timeouts correctly (took too long to run)
-- [ ] identify codebaes and projects with good evaluators + benchmarks to migrate into tool

@@ -13,16 +13,16 @@ class EvolutionConfig:
         task_sys_msg: Optional system message for the task.
         num_agent_workers: Number of agent workers to use.
         max_generations: Maximum number of program generations to evolve.
+        force_probing: Whether to force probing of evo block during multi-turn loop for EvoExplore/EvoExploit.
     """
     results_dir: Optional[str] = None
-    task_sys_msg: Optional[str] = None
+    task_sys_msg: str =  ""
     num_agent_workers: int = 4
     max_generations: int = 50
+    force_probing: bool = False 
     language: str = "python"
     llm_models: List[str] = field(default_factory=lambda: ["azure-gpt-4.1-mini"])
-    llm_dynamic_selection: Optional[str] = None
-    llm_dynamic_selection_kwargs: dict = field(default_factory=lambda: {})
-    llm_kwargs: dict = field(default_factory=lambda: {})
+    
 
 class DatabaseConfig:
     """Configuration for program database. ShinkEvolve code still needs to be

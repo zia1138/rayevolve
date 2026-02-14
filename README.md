@@ -1,13 +1,14 @@
 # rayevolve <a href="https://github.com/zia1138/rayevolve"><img src="rayevolve.png" align="right" height="150" alt="rayevolve github" /></a>
-Experimental project for LLM guided algorithm design and evolution built on ray.
-Based on [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 
+Experimental project for LLM guided algorithm design and evolution built on [ray](https://www.ray.io/),
+[pydantic-ai](https://github.com/pydantic/pydantic-ai), and [logfire](https://github.com/pydantic/logfire).
+Originally started as an in-place fork from [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve)
 
-You can run the circle packing example usign the configs in `examples/circlepacking/config.py` with the `default` profile as follows:
+You can run the circle packing example using the configs in `examples/circlepacking/config.py` with the `default` profile as follows:
 ```bash
 rayevolve run examples/circle_packing
 ```
-Use `rayevovle --help` to get all of the command line parameters. 
+Use `rayevolve --help` to get all of the command line parameters. 
 
 You can visualize the progress as follows:
 `python -m rayevolve.webui.visualization --db results_XXX_YYY/evolution_db.sqlite`
@@ -22,15 +23,30 @@ parameters.
 
 # TODO
 
-- [ ] clean up and improve config system, move away from hydra and use code as config
-- [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement
+## Prioirtized
+- [ ] continue to clean up config system
+- [ ] add a configuration parameter to turn on and off forced probing
 - [ ] add multiple model support (try to get to 2.635 on circle packing)
-- [ ] remove more unused ShinkaEvolve code
+
+## Important but not urgent
+- [ ] simplify and clean up SQLlite datatabase actor
+- [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement
+- [ ] handle runtime timeouts correctly (took too long to run)
+- [ ] identify codebaes and projects with good evaluators + benchmarks to migrate into tool
+- [ ] need to clean up and add additiona logging information, confirm logging works correctly
+
+## Algorithmic Ideas
 - [ ] dynamically optimizing and updating the system prompt based on where the system is getting stuck
 - [ ] add a metaoptimizer to get the system unstuck and adds strategic guidance 
 - [ ] for exploit/explore improve probe functionality, not clear it is always useful
-- [ ] handle runtime timeouts correctly (took too long to run)
-- [ ] identify codebaes and projects with good evaluators + benchmarks to migrate into tool
+
+# Related Open Source Projects
+
+* [OpenEvolve](https://github.com/algorithmicsuperintelligence/openevolve)
+* [LLM4AD](https://github.com/Optima-CityU/llm4ad)
+* [GigaEvo](https://github.com/AIRI-Institute/gigaevo-platform/tree/main)
+* [station](https://github.com/dualverse-ai/station)
+* [CSE/EvoControl](https://github.com/QuantaAlpha/EvoControl)
 
 # debugging in ray
 

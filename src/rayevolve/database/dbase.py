@@ -234,7 +234,7 @@ class Program:
 
         return cls(**filtered_data)
 
-@ray.remote
+@ray.remote(num_cpus=1)
 class ProgramDatabase:
     """
     SQLite-backed database for storing and managing programs during an

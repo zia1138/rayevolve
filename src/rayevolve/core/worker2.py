@@ -150,7 +150,7 @@ def extract_evolve_block(full_code: str) -> EvolveBlock:
         post_block="".join(lines[end_index+1:])
     )
 
-@ray.remote
+@ray.remote(num_cpus=0)
 class EvoGen:
     """Keeps track of the current generation number."""
     def __init__(self, initial=0):
@@ -166,9 +166,16 @@ class EvoGen:
         """Increment and return the new generation."""
         self.generation += 1
         return self.generation
-    
-@ray.remote
+
+@ray.remote(num_cpus=0)
 class EvoWorker:
+    """
+    rayevolve worker that determines strategy and executes explore/exploit agents.
+    
+    NOTE: @ray.remote(num_cpus=0) because most of the compute happens on LLM model providers, and we don't want to 
+    unnecessarily reserve CPU resources on the ray cluster for the worker actors.
+
+    """
     def __init__(self, 
                  worker_id: str,
                  gen: EvoGen,
@@ -274,12 +281,15 @@ class EvoWorker:
             - For general structural change: `explore_top_k` should be `min({total_programs}, 2 * {num_workers})`.
             - For radical architectural rewrite of elite code: `explore_top_k` should be `max(1, int({num_workers} * 0.1))` (small, focused pool of elites).
         """)
-        num_workers = 8 #TODO: Get rid of this hard coded value.
+        num_workers = self.evo_config.num_agent_workers
         total_programs = ray.get(self.db.total_programs.remote())
         prompt = template.format(best_score_table=best_score_table, num_workers=num_workers, total_programs=total_programs)
 
         # TODO: Need to allow model to be configurable.     
-        evo_strategist = Agent(model='google-gla:gemini-3-pro-preview', system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
+        evo_strategist = Agent(model='google-gla:gemini-3-pro-preview', 
+                               output_type=StrategyProbs, 
+                               system_prompt=self.evo_config.task_sys_msg,
+                               toolsets = None)
         result = evo_strategist.run_sync(prompt)
         probs: StrategyProbs = result.output
 
@@ -301,7 +311,7 @@ class EvoWorker:
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
+        parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         evolve_block = extract_evolve_block(parent.code)
         inference_start = time.time()
 
@@ -395,7 +405,7 @@ class EvoWorker:
             Returns:
                 str: A human-readable report of the results of the experiment.
             """
-            if ctx.deps.probe_needed == True:
+            if self.evo_config.force_probing and ctx.deps.probe_needed:
                 return "You must use `probe` to gather information that will help you improve the program before another run_experiment." 
             ctx.deps.probe_needed = True
 
@@ -515,7 +525,7 @@ class EvoWorker:
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-        parent = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
+        parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         inference_start = time.time()
 
         evolve_block = extract_evolve_block(parent.code)
@@ -640,7 +650,7 @@ class EvoWorker:
                 if ctx.deps.inspiration_count == 0:
                     return "You must use `get_inspiration` to identify useful concepts from other successful programs at least once before running another experiment."
 
-            if ctx.deps.probe_needed == True:
+            if self.evo_config.force_probing and ctx.deps.probe_needed:
                 return "You must use `probe` to gather information that will help find a novel program before another run_experiment." 
             
             ctx.deps.run_experiment_count += 1
@@ -715,6 +725,7 @@ class EvoWorker:
         @evo_explore.tool
         def install_package(ctx: RunContext[ExploreContext], package_name: str) -> str:
             """Call this tool to install a new package in the execution environment."""
+            # TODO: Direct use of Popen is not ideal here. 
             process = Popen(["uv", "pip", "install", package_name])
             process.wait()
             if process.returncode == 0:

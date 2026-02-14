@@ -138,7 +138,7 @@ def run(
     ray.init(runtime_env=runtime_env)
 
     try:
-        # TODO: Might want to use the RayEvolveConfig eventually.
+        # TODO: Might want to use RayEvolveConfig eventually.
         evo_runner = EvolutionRunner(cfg.evo, cfg.job, cfg.database, project_dir, verbose=True)
         evo_runner.run_ray()
     finally:

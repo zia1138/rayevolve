@@ -279,7 +279,7 @@ class EvoWorker:
         prompt = template.format(best_score_table=best_score_table, num_workers=num_workers, total_programs=total_programs)
 
         # TODO: Need to allow model to be configurable.     
-        evo_strategist = Agent(model='google-gla:gemini-2.5-pro', system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
+        evo_strategist = Agent(model='google-gla:gemini-3-pro-preview', system_prompt=self.evo_config.task_sys_msg, output_type=StrategyProbs)
         result = evo_strategist.run_sync(prompt)
         probs: StrategyProbs = result.output
 
@@ -332,7 +332,7 @@ class EvoWorker:
 
         exploit_prompt = exploit_template.format(code=evolve_block.inner_content, score=parent.combined_score)
 
-        model = GoogleModel('gemini-2.5-flash')
+        model = GoogleModel('gemini-3-flash-preview')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})
 
         def submit(ctx: RunContext[ExploitContext], program: str) -> None:
@@ -437,7 +437,7 @@ class EvoWorker:
             clear_results_dir(results_dir)
             return out_str
 
-        @evo_exploit.tool
+        @evo_exploit.tool(retries=3)
         def probe(ctx: RunContext[ExploitContext], probe_code: str, intent: str) -> str:
             """
             Run a diagnostic probe: modify the program to emit targeted, low-cost evidence about why it is performing as it is.
@@ -455,7 +455,7 @@ class EvoWorker:
             the probe should go beyond shape/head printing and report at least one relationship-level finding
             (e.g., a dependency, conditional pattern, subgroup difference, or anomaly) that motivates a concrete next change.
 
-            Probes must NOT be used primarily to check basic correctness (e.g., “does it run?” or only printing trivial summaries).
+            Probes must NOT be used primarily to check basic correctness (e.g., "does it run?" or only printing trivial summaries).
             If correctness is necessary, it should be a minimal side-effect, not the goal.
 
             The probe should add lightweight instrumentation (prints/summaries), run briefly, and quit early.
@@ -465,15 +465,20 @@ class EvoWorker:
                 probe_code: Modified program with diagnostic instrumentation.
                 intent: The hypothesis/question being tested and what decision it informs.
             Returns:
-                stdout/stderr from running the probe.            
+                stdout/stderr from running the probe.
             """
             ctx.deps.probe_needed = False
-            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
-            results, rtime = self.scheduler.run(exec_fname, results_dir)                    
+            # Probe inherits the parent's EVOLVE-BLOCK so it has access to all
+            # definitions (PREPROC, BASE_LEARNERS, engineer_features, etc.).
+            # Without this, probes run against a bare skeleton and crash on
+            # missing names like np.column_stack on an empty list.
+            full_probe = ctx.deps.evolve_block.inner_content + "\n" + probe_code
+            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(full_probe), "utf-8")
+            results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             out_str = ""
             stdout = results.get("stdout_log", "").strip()
-            stderr = results.get("stderr_log", "").strip()        
+            stderr = results.get("stderr_log", "").strip()
             if stdout != "":
                 out_str += "Here is the standard output of the probe code:\n"
                 out_str += "```\n"
@@ -486,14 +491,18 @@ class EvoWorker:
                 out_str += "```\n"
             if out_str == "":
                 out_str = "The probe code did not produce any output."
+                raise ModelRetry("Probe produced no output. Check for syntax errors or early exits in your probe code and try again.")
+            elif not stdout and stderr:
+                # Real error: stderr but no useful stdout — force retry
+                raise ModelRetry(f"Probe failed with error:\n{stderr[:1000]}\nFix the probe code and try again.")
             else:
                 out_str += "Use this information to improve the program in your next attempt. If there was an error, rerun the `probe` tool.\n"
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)
-            return out_str              
+            return out_str
 
         try:
-            exploit_ctx = ExploitContext(evolve_block=evolve_block, 
+            exploit_ctx = ExploitContext(evolve_block=evolve_block,
                                          parent_score=parent.combined_score,
                                          inference_start=inference_start)
             evo_exploit.run_sync(exploit_prompt, deps=exploit_ctx)
@@ -555,7 +564,7 @@ class EvoWorker:
                                                 score=parent.combined_score,
                                                 floor_score=floor_score)
 
-        model = GoogleModel('gemini-2.5-flash')
+        model = GoogleModel('gemini-3-flash-preview')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})
         package_expert = Agent(model, model_settings=settings, system_prompt=self.evo_config.task_sys_msg)
 
@@ -728,8 +737,8 @@ class EvoWorker:
             response = await package_expert.run(expert_prompt)
             return response.output
 
-        @evo_explore.tool
-        def probe(ctx: RunContext[ExploreContext], probe_code: str, intent: str) -> str:            
+        @evo_explore.tool(retries=3)
+        def probe(ctx: RunContext[ExploreContext], probe_code: str, intent: str) -> str:
             """
             Run a diagnostic probe: modify the program to emit targeted, low-cost evidence about why it is performing as it is.
 
@@ -746,7 +755,7 @@ class EvoWorker:
             the probe should go beyond shape/head printing and report at least one relationship-level finding
             (e.g., a dependency, conditional pattern, subgroup difference, or anomaly) that motivates a concrete next change.
 
-            Probes must NOT be used primarily to check basic correctness (e.g., “does it run?” or only printing trivial summaries).
+            Probes must NOT be used primarily to check basic correctness (e.g., "does it run?" or only printing trivial summaries).
             If correctness is necessary, it should be a minimal side-effect, not the goal.
 
             The probe should add lightweight instrumentation (prints/summaries), run briefly, and quit early.
@@ -756,15 +765,17 @@ class EvoWorker:
                 probe_code: Modified program with diagnostic instrumentation.
                 intent: The hypothesis/question being tested and what decision it informs.
             Returns:
-                stdout/stderr from running the probe.            
+                stdout/stderr from running the probe.
             """
             ctx.deps.probe_needed = False
-            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(probe_code), "utf-8")
+            # Probe inherits the parent's EVOLVE-BLOCK (same fix as exploit probe).
+            full_probe = ctx.deps.evolve_block.inner_content + "\n" + probe_code
+            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(full_probe), "utf-8")
             results, rtime = self.scheduler.run(exec_fname, results_dir)
 
             out_str = ""
             stdout = results.get("stdout_log", "").strip()
-            stderr = results.get("stderr_log", "").strip()        
+            stderr = results.get("stderr_log", "").strip()
             if stdout != "":
                 out_str += "Here is the standard output of the probe code:\n"
                 out_str += "```\n"
@@ -777,11 +788,14 @@ class EvoWorker:
                 out_str += "```\n"
             if out_str == "":
                 out_str = "The probe code did not produce any output."
+                raise ModelRetry("Probe produced no output. Check for syntax errors or early exits in your probe code and try again.")
+            elif not stdout and stderr:
+                raise ModelRetry(f"Probe failed with error:\n{stderr[:1000]}\nFix the probe code and try again.")
             else:
                 out_str += "Use this information to help find a novel program in your next attempt. If there was an error, rerun the `probe` tool.\n"
             # NOTE: This is an issue for any concurrency in this agent.
             clear_results_dir(results_dir)
-            return out_str              
+            return out_str
 
         try:
             explore_ctx = ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start)

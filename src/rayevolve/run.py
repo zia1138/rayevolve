@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import typer
 import runpy
 from pathlib import Path
@@ -98,7 +99,7 @@ def run(
     seed: int = typer.Option(0),
     run_name: str = typer.Option("run"),
     dry_run: bool = typer.Option(False),
-    ray_debug: bool = typer.Option(True, help="Enable Ray debug env vars"),
+    ray_debug: bool = typer.Option(False, help="Enable Ray debug env vars (causes hangs on evolved script exceptions)"),
 ):
     """
     Run rayevolve using the given profile from config.py in the specified project directory.
@@ -119,10 +120,21 @@ def run(
     if dry_run:
         return
 
-    runtime_env = None
+    # Forward API keys to Ray workers.  Ray spawns worker processes that do
+    # NOT inherit the parent's environment variables.  pydantic-ai's
+    # GoogleModel reads GOOGLE_API_KEY from os.environ inside each worker,
+    # so without explicit forwarding every agent call fails with an auth
+    # error.  runtime_env["env_vars"] injects these into every worker.
+    env_vars = {}
+    for key in ("GOOGLE_API_KEY",):
+        val = os.environ.get(key)
+        if val:
+            env_vars[key] = val
     if ray_debug:
-        runtime_env = {"env_vars": {"RAY_DEBUG": "1", "RAY_DEBUG_POST_MORTEM": "1"}}
+        env_vars["RAY_DEBUG"] = "1"
+        env_vars["RAY_DEBUG_POST_MORTEM"] = "1"
 
+    runtime_env = {"env_vars": env_vars} if env_vars else None
     ray.init(runtime_env=runtime_env)
 
     try:

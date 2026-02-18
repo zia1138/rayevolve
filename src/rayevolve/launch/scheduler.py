@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 def load_results(results_dir: str):
     """
     Loads results from the specified directory.
-
+    Reads in job_log.out, job_log.err, metrics.json, and 
+    correct.json if they exist.    
+    
     Args:
         results_dir: The directory containing the results.
 
@@ -73,7 +75,7 @@ def run_local(
     verbose: bool = True,
     timeout_sec: int,
 ) -> int:
-    """Run a command synchronously, log stdout/stderr, and return returncode."""
+    """Run a command synchronously, log stdout/stderr to job_log.out and job_log.err, and return returncode."""
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
 
@@ -129,12 +131,16 @@ class JobScheduler:
         self.verbose = verbose
 
     def _build_command(self, exec_fname_t: str, results_dir_t: str) -> List[str]:
+        
+        # Add conda environment if required.
         base = (
             ["conda", "run", "-n", self.config.conda_env]
             if self.config.conda_env
             else []
         )
 
+        # Runs python evaluate.py --program_path {exec_fname_t} --results_dir {results_dir_t}
+        # Assumes user created evaluate.py to use program path and output to results dir.
         cmd = [
             *base,
             "python",
@@ -153,17 +159,26 @@ class JobScheduler:
         return cmd
 
     def run(self, exec_fname_t: str, results_dir_t: str) -> Tuple[Dict[str, Any], float]:
+
+        # 1. Build command to run
         cmd = self._build_command(exec_fname_t, results_dir_t)
 
+        # 2. Run command locally and capture return code
         t0 = time.time()
         _returncode = run_local(
             results_dir_t, cmd, self.project_dir, verbose=self.verbose, timeout_sec=self.config.timeout_sec
         )
 
+        # 3. Load job_log.out, job_log.err, metrics.json, and correct.json 
+        #    Assumes evaluate.py will ouput metrics.json and correct.json. 
+        #    run_local will capture and output job_log.out and job_log.err. 
+        # 
+        #    Minimally metrics should have a "combined_score" field which is used for evolution.
         results = load_results(results_dir_t) or {
             "correct": {"correct": False},
             "metrics": {},
         }
-
+        
+        # 4. Return results and runtime in seconds. 
         rtime = time.time() - t0
         return results, rtime

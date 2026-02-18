@@ -139,12 +139,6 @@ class EvolutionRunner:
         results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0/results"
         Path(results_dir).mkdir(parents=True, exist_ok=True)
 
-
-        api_costs = 0.0
-        patch_name = "initial_program"
-        patch_description = "Initial program from file."
-        patch_type = "init"
-
         if self.verbose:
             logger.info(
                 f"Copying initial program from {self.project_dir}/initial.py"
@@ -161,50 +155,26 @@ class EvolutionRunner:
             logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
             evaluated_code = ""
 
-        correct_val = False
-        metrics_val = {}
-        stdout_log = ""
-        stderr_log = ""
-        if results:
-            correct_val = results.get("correct", {}).get("correct", False)
-            metrics_val = results.get("metrics", {})
-            stdout_log = results.get("stdout_log", "")
-            stderr_log = results.get("stderr_log", "")
+        if results['correct']['correct']: 
+            combined = results.get("metrics", {}).get("combined_score")
+            db_program = Program(
+                id=str(uuid.uuid4()),
+                code=evaluated_code,
+                parent_id=None,
+                generation=0,
+                code_diff="initial",
+                correct=True,
+                combined_score=combined,
+                metadata={
+                    "inference_time": 0.0,  # No inference time for generation 0
+                    "compute_time": rtime,
+                    "stdout_log": results.get("stdout_log", ""),
+                    "stderr_log": results.get("stderr_log", ""),
+                }
+            )
 
-        combined_score = metrics_val.get("combined_score", 0.0)
-        public_metrics = metrics_val.get("public", {})
-        private_metrics = metrics_val.get("private", {})
-        text_feedback = metrics_val.get("text_feedback", "")
-
-        # Add the program to the database
-        db_program = Program(
-            id=str(uuid.uuid4()),
-            code=evaluated_code,
-            language=self.evo_config.language,
-            parent_id=None,
-            generation=0,
-            archive_inspiration_ids=[],
-            top_k_inspiration_ids=[],
-            code_diff=None,
-            embedding=[],
-            correct=correct_val,
-            combined_score=combined_score,
-            public_metrics=public_metrics,
-            private_metrics=private_metrics,
-            text_feedback=text_feedback,
-            metadata={
-                "compute_time": rtime,
-                "inference_time": 0.0,  # No inference time for generation 0
-                "api_costs": api_costs,
-                "embed_cost": 0.0,
-                "novelty_cost": 0.0,  # No novelty cost for generation 0
-                "patch_type": patch_type,
-                "patch_name": patch_name,
-                "patch_description": patch_description,
-                "stdout_log": stdout_log,
-                "stderr_log": stderr_log,
-            },
-        )
-        ray.get(self.db.add.remote(db_program, verbose=True))
+            ray.get(self.db.add.remote(db_program, verbose=True))
+        else:
+            raise ValueError("Initial program is not correct. Please fix the initial program and try again.")
     
     

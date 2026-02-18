@@ -20,8 +20,7 @@ class EvolutionConfig:
     num_agent_workers: int = 4
     max_generations: int = 50
     force_probing: bool = False 
-    llm_models: List[str] = field(default_factory=lambda: ["azure-gpt-4.1-mini"])
-    
+
 
 class DatabaseConfig:
     """Configuration for program database. ShinkEvolve code still needs to be

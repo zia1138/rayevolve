@@ -361,7 +361,6 @@ class EvoWorker:
                         db_program = Program(
                             id=str(uuid.uuid4()),
                             code=evo_program,
-                            language=self.evo_config.language,
                             parent_id=parent.id,
                             generation=current_gen,
                             code_diff="agent_exploit",
@@ -596,7 +595,6 @@ class EvoWorker:
                         db_program = Program(
                             id=str(uuid.uuid4()),
                             code=evo_program,
-                            language=self.evo_config.language,
                             parent_id=parent.id,
                             generation=current_gen,
                             code_diff="agent_explore",

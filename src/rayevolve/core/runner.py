@@ -22,7 +22,7 @@ class EvolutionRunner:
         evo_config: EvolutionConfig,
         job_config: JobConfig,
         db_config: DatabaseConfig,
-        project_dir: str, 
+        project_dir: str,
         verbose: bool = False,
     ):
         self.evo_config = evo_config

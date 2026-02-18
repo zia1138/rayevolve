@@ -247,7 +247,7 @@ class DatabaseRequestHandler(http.server.SimpleHTTPRequestHandler):
                 # Ensure database connection is properly closed
                 if db and hasattr(db, "close"):
                     try:
-                        db.close()
+                        ray.get(db.close.remote())
                     except Exception as e:
                         print(f"[SERVER] Warning: Error closing database: {e}")
 

@@ -14,14 +14,16 @@ class EvolutionConfig:
         num_agent_workers: Number of agent workers to use.
         max_generations: Maximum number of program generations to evolve.
         force_probing: Whether to force probing of evo block during multi-turn loop for EvoExplore/EvoExploit.
+        enable_probing: Whether to register probe tools on exploit/explore agents.
     """
     results_dir: Optional[str] = None
     task_sys_msg: str =  ""
     num_agent_workers: int = 4
     max_generations: int = 50
-    force_probing: bool = False 
+    force_probing: bool = False
+    enable_probing: bool = True
     llm_models: List[str] = field(default_factory=lambda: ["azure-gpt-4.1-mini"])
-    
+
 
 class DatabaseConfig:
     """Configuration for program database. ShinkEvolve code still needs to be
@@ -88,4 +90,3 @@ def validate(cfg: RayEvolveConfig) -> None:
     for name in ("evo", "database", "job"):
         if not hasattr(cfg, name) or getattr(cfg, name) is None:
             raise ValueError(f"Config missing required section: {name}")
-

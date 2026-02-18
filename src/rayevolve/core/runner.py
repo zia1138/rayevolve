@@ -85,19 +85,10 @@ class EvolutionRunner:
             project_dir=self.project_dir,
             verbose=verbose,
         )
-
-        # TODO: Need to figure out how to handle languages in a cleaner way.
-        if self.evo_config.language == "cuda":
-            self.lang_ext = "cu"
-        elif self.evo_config.language == "cpp":
-            self.lang_ext = "cpp"
-        elif self.evo_config.language == "python":
-            self.lang_ext = "py"
-        elif self.evo_config.language == "rust":
-            self.lang_ext = "rs"
-        else:
-            msg = f"Language {self.evo_config.language} not supported"
-            raise ValueError(msg)
+        
+        # TODO: Need to handle extension of output files since trying to make
+        # code language agnostic.
+        self.lang_ext = "py"
 
         if self.resuming_run:
             completed_generations:int = ray.get(self.db.get_last_iteration.remote()) 
@@ -160,7 +151,7 @@ class EvolutionRunner:
             )
         shutil.copy(f"{self.project_dir}/initial.py", exec_fname)
 
-        # Run the evaluation synchronously
+        # Run the evaluation code.
         results, rtime = self.scheduler.run(exec_fname, results_dir)
 
         # Read the evaluated code for database insertion

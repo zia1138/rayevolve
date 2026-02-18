@@ -200,12 +200,9 @@ class EvoWorker:
             verbose=verbose,
         )
 
-        # Currently limited to python.
-        if self.evo_config.language == "python":
-            self.lang_ext = "py"
-        else:
-            msg = f"Language {self.evo_config.language} not supported"
-            raise ValueError(msg)
+        # TODO: Need to handle extension of output files since trying to make
+        # code language agnostic.
+        self.lang_ext = "py"
 
         # TODO: Need to handle logfire config more cleanly.
         logfire.configure(scrubbing=False)

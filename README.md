@@ -2,7 +2,7 @@
 
 Experimental project for LLM guided algorithm design and evolution built on [ray](https://www.ray.io/),
 [pydantic-ai](https://github.com/pydantic/pydantic-ai), and [logfire](https://github.com/pydantic/logfire).
-Originally started as an in-place fork from [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve)
+Originally started as an in-place fork from [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 
 You can run the circle packing example using the configs in `examples/circlepacking/config.py` with the `default` profile as follows:
 ```bash
@@ -23,9 +23,8 @@ parameters.
 
 # TODO
 
-## Prioirtized
+## Priority
 - [ ] continue to clean up config system
-- [ ] add a configuration parameter to turn on and off forced probing
 - [ ] add multiple model support (try to get to 2.635 on circle packing)
 
 ## Important but not urgent

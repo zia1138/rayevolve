@@ -20,7 +20,6 @@ class EvolutionConfig:
     num_agent_workers: int = 4
     max_generations: int = 50
     force_probing: bool = False 
-    language: str = "python"
     llm_models: List[str] = field(default_factory=lambda: ["azure-gpt-4.1-mini"])
     
 

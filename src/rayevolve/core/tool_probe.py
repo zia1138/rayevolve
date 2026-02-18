@@ -120,45 +120,73 @@ DEFAULT_EXTRA_PROBE_INSTRUCTIONS = """\
 Most common probe patterns:
 - Component relationships: pairwise correlations between outputs
   to find redundancy or independence.
-- Component ranking: order by a metric (AUC, coefficient,
+- Component ranking: order by a metric (score, coefficient,
   separability) to identify strongest/weakest.
 - Distribution diagnostics: scale, variance, skew of outputs to
   detect imbalance or outliers.
 - Processing bottlenecks: hotspots in time, memory, or IO that
   limit throughput or cause timeouts.
 
-Using probe_hook (preferred for cross-fold analysis):
-- Override `probe_hook(ctx)` -- it receives a single dict `ctx`
-  with all cross-fold data, preprocessed features, trained model
-  objects, and meta-learner results. Called ONCE after all folds
-  and meta-learner tuning. See probe_hook() docstring in the
-  system message for all available ctx keys and scopes. Example:
-      def probe_hook(ctx):
-          Z = ctx['Z']  # stacked OOF logits, all folds
-          names = ctx['base_learner_names']
-          corr = np.corrcoef(Z.T)
-          # ... analysis and prints here ...
+Accessing internal state -- choose the right strategy:
 
-NaN pitfall:
-- Correlating features with a zero-variance target (e.g., a
-  minority class with 0 samples in the fold) produces NaN for ALL
-  features. Always check the target count before correlating
-  (`if target.sum() == 0: print("WARNING: ...")`) and use
-  `.dropna()` after `.corrwith()`. The last CV fold may not
-  contain all minority classes.
+  (A) Hook function already exists in the evolved code:
+      Some programs define a dedicated hook function (e.g.,
+      `probe_hook(ctx)`) that is called at a strategic point --
+      typically after all processing is complete -- and receives
+      aggregated internal state as a dict. If such a hook exists,
+      OVERRIDE it to access the data you need. Check the system
+      message or the evolved code for the hook's signature and
+      available context keys.
+          _original_hook = probe_hook
+          def probe_hook(ctx):
+              _original_hook(ctx)  # preserve original behavior
+              # ... your analysis using ctx ...
+
+  (B) No hook function -- intercept existing functions:
+      When no hook exists, override one or more functions in the
+      evolved code to intercept execution. This works well for
+      programs that call a function once (e.g., an optimization
+      routine, a constructor, a scoring function). Save the
+      original, call it inside your override, analyze the result,
+      then return it unchanged.
+          _saved_fn = some_function
+          def some_function(*args, **kwargs):
+              result = _saved_fn(*args, **kwargs)
+              # ... your analysis of result ...
+              return result  # MUST return original result
+
+  (C) Design a new hook when neither (A) nor (B) suffices:
+      If the data you need is buried deep inside the program and
+      no single function exposes it, you may inject a new hook
+      point. Override the innermost function that touches the data,
+      accumulate values into a module-level list, and print your
+      analysis after all calls complete. Use `_IS_PROBE` (set
+      automatically) to guard probe-only code paths so they don't
+      affect the score when not probing.
+          _probe_data = []
+          _saved_inner = inner_function
+          def inner_function(*args, **kwargs):
+              result = _saved_inner(*args, **kwargs)
+              if _IS_PROBE:
+                  _probe_data.append(extract_what_you_need(result))
+              return result
+          # At module level, AFTER all definitions:
+          # (this runs when the program executes)
+          # ... call the entry point, then analyze _probe_data ...
 
 Output formatting (extended):
-- If NOT using hooks and your override runs multiple times (once
-  per fold), collect values into a global list and print a single
-  aggregated summary inside the LAST call (never at module level).
+- If your override runs multiple times (e.g., once per iteration
+  or fold), collect values into a global list and print a single
+  aggregated summary at the end (never at module level before
+  execution completes).
 - Rank-order results so the most important items appear first.
 - Flag instabilities: if a value changes sign across runs or has
   high variance relative to its mean, note it explicitly.
 - Before writing each Summary bullet, RANK all components by the
-  metric you measured (coefficient, correlation, AUC, etc.) and
-  assign verdicts based on RELATIVE position, not absolute value
-  alone. A positive value does NOT mean KEEP -- if it's 10x smaller
-  than the best, it may warrant REMOVE or INVESTIGATE.
+  metric you measured and assign verdicts based on RELATIVE
+  position, not absolute value alone. A positive value does NOT
+  mean KEEP -- if it's 10x smaller than the best, it may warrant
+  REMOVE or INVESTIGATE.
 
   Ranking rules:
   - Show the TOP 2-3 names+values in every ranking, not just #1.
@@ -166,9 +194,6 @@ Output formatting (extended):
     and list the cluster (e.g., "A (0.13) = B (0.13) = C (0.11)").
   - Show TIER STRUCTURE when it exists (e.g., "top 3 at 0.11-0.13,
     bottom 2 at 0.05-0.06").
-  - When reporting engineered features, COMPARE against the
-    strongest natural feature in the same model -- an eng__ coef
-    only has meaning relative to natural features.
 
   Each bullet must:
   (a) State a concrete verdict: KEEP/REMOVE/INVESTIGATE + why,

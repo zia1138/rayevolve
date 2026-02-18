@@ -120,6 +120,7 @@ def run(
     if dry_run:
         return
 
+    env_vars = {}
     if ray_debug:
         env_vars["RAY_DEBUG"] = "1"
         env_vars["RAY_DEBUG_POST_MORTEM"] = "1"

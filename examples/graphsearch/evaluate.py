@@ -1,94 +1,87 @@
-import os
-import argparse
-import numpy as np
-from typing import Tuple, Optional, List, Dict, Any
+import json
+import pickle
+from pathlib import Path
+from typing import Dict, Iterable, List, Any
 
-import pandas as pd
-from sklearn.metrics import confusion_matrix
+import networkx as nx
+import typer
+from rayevolve.core.evaluator import load_module_from_path, save_json_results
 
-from rayevolve.core import run_rayevolve_eval
+app = typer.Typer(add_completion=False)
 
+def evaluate_candidate(candidate_module, dataset_dir: Path) -> Dict[str, Any]:
+    index = json.loads((dataset_dir / "index.json").read_text("utf-8"))
 
-def validate_paths(
-    run_output: Dict[str, Any],
-) -> Tuple[bool, Optional[str]]:
-    """
-    Outputs validation information.
+    # 1. Inherit from the candidate's SearchEnv to ensure type compatibility
+    # This allows 'isinstance(env, SearchEnv)' to work inside the candidate.
+    class EvaluatorSearchEnv(candidate_module.SearchEnv):
+        def __init__(self, adj: Dict, start, goal):
+            self._adj = adj
+            self._start = start
+            self._goal = goal
+            self.neighbors_iterated = 0
 
-    Args:
-        run_output: Dictionary containing results from 'evaluate_all_graphs'.
+        @property
+        def start(self): return self._start
 
-    Returns:
-        (is_valid: bool, error_message: Optional[str])
-    """
+        @property
+        def goal(self): return self._goal
 
-    msg = "Validation successful."
+        def is_goal(self, n): return n == self._goal
 
-    if not run_output["valid"]:
-        msg = "Invalid paths found in evaluation."
+        def neighbors(self, n):
+            for nbr in self._adj.get(n, []):
+                self.neighbors_iterated += 1
+                yield nbr
 
-    return run_output["valid"], msg 
+    total_score = 0.0
+    all_valid = True
 
+    for inst in index:
+        # Load Graph and Meta
+        G = pickle.loads((dataset_dir / inst["graph"]).read_bytes())
+        meta = json.loads((dataset_dir / inst["meta"]).read_text("utf-8"))
+        
+        start, goal = tuple(meta["start"]), tuple(meta["goal"])
+        adj = {n: list(G.neighbors(n)) for n in G.nodes}
 
-def aggregate_all_graphs(
-    results: List[Dict[str, Any]], results_dir: str
-) -> Dict[str, Any]:
-    """
-    Aggregates metrics for train_and_classify. Assumes num_runs=1.
-    """
-    if not results:
-        return {"combined_score": 0.0, "error": "No results to aggregate"}
+        # 2. Run the candidate algorithm
+        env = EvaluatorSearchEnv(adj, start, goal)
+        path = candidate_module.graph_search(env)
 
-    graph_res = results[0] # need to figure out types here
+        # 3. Validation
+        valid = (path is not None and len(path) > 0 and 
+                 path[0] == start and path[-1] == goal and 
+                 all(b in adj.get(a, []) for a, b in zip(path, path[1:])))
+        
+        if not valid:
+            all_valid = False
+            score = 0.0
+        else:
+            # Score = (Max Possible Cost) - (Actual Cost)
+            # Weights: 10.0 per neighbor query, 1.0 per path edge
+            max_cost = 10.0 * sum(len(v) for v in adj.values()) + 1.0 * len(adj)
+            actual_cost = 10.0 * env.neighbors_iterated + 1.0 * (len(path) - 1)
+            score = max(0.0, max_cost - actual_cost)
 
-    metrics = {
-        "combined_score": graph_res["total_score"],
-    }
+        total_score += score
 
-    return metrics
+    return {"combined_score": total_score, "valid": all_valid}
 
-def no_kwargs(run_index: int) -> Dict[str, Any]:
-    """Provides keyword arguments for runs (none needed)."""
-    return {}
-
-def main(program_path: str, results_dir: str):
-    """Runs the evaluation using rayevolve.eval."""
-    os.makedirs(results_dir, exist_ok=True)
-
-    num_experiment_runs = 1
-
-    # Define a nested function to pass results_dir to the aggregator
-    def _aggregator_with_context(
-        r: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        return aggregate_all_graphs(r, results_dir)
-
-    metrics, correct, error_msg = run_rayevolve_eval(
-        program_path=program_path,
-        results_dir=results_dir,
-        experiment_fn_name="evaluate_all_graphs",
-        num_runs=num_experiment_runs,
-        validate_fn=validate_paths,
-        aggregate_metrics_fn=_aggregator_with_context,
-        get_experiment_kwargs=no_kwargs,
-    )
-
+def main(
+    program_path: str = typer.Option("initial.py"),
+    results_dir: str = typer.Option("results"),
+    dataset_dir: str = typer.Option("./data"),
+):
+    # Load candidate as a module
+    candidate_module = load_module_from_path(program_path)
+    
+    # Run evaluation
+    metrics = evaluate_candidate(candidate_module, Path(dataset_dir))
+    
+    # Save results for RayEvolve
+    is_valid = metrics.pop("valid")
+    save_json_results(results_dir, metrics, is_valid)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="data set fitting evaluator using rayevolve.eval"
-    )
-    parser.add_argument(
-        "--program_path",
-        type=str,
-        default="initial.py",
-        help="Path to program to evaluate (must contain 'evaluate_all_graphs' function).",
-    )
-    parser.add_argument(
-        "--results_dir",
-        type=str,
-        default="results",
-        help="Dir to save results (metrics.json, correct.json, extra.npz)",
-    )
-    parsed_args = parser.parse_args()
-    main(parsed_args.program_path, parsed_args.results_dir)
+    typer.run(main)

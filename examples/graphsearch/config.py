@@ -6,10 +6,12 @@ SYSTEM_MSG = textwrap.dedent("""\
     You are designing a graph-search algorithm.
 
     Task:
+    - Implement the `graph_search` function.
     - Given a graph with a start node and a goal node, return a valid path if one exists.
-    - You may interact with the graph only by requesting the neighbors of a node and checking whether a node is the goal.
+    - You may interact with the graph only by requesting the neighbors of a node and checking whether a node is the goal via the provided `env` object.
 
     Evaluation:
+    - Your `graph_search` function will be called with an `env` instance.
     - The solution is invalid if it fails to find a path on any instance.
     - Cost is proportional to:
       - the total number of neighbor queries,
@@ -20,7 +22,9 @@ SYSTEM_MSG = textwrap.dedent("""\
     - Some graphs contain hidden structural constraints that make locally optimal decisions misleading.
     - Lightweight probing to infer structure from interaction may help reduce overall cost.
 
-    NOTE: You are **not** allowed to redefine `SearchEnv` or change its interface. Assume external code passed you this dataclass.
+    IMPORTANT IMPLEMENTATION DETAILS:
+    - Do NOT modify the `SearchEnv` class definition provided in the template. The evaluator will pass a compatible subclass instance at runtime.
+    - Your code must define `graph_search(env) -> Optional[List]`.
 """)
 
 def list_profiles() -> list[str]:

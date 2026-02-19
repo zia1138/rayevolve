@@ -1,44 +1,24 @@
-
 # EVOLVE-BLOCK-START
-
 import pandas as pd
 import numpy as np
 
-def preprocess_train_and_predict(X_train: pd.DataFrame, y_train: pd.DataFrame, X_val: pd.DataFrame):
-    """Return X_val and random guesses for y_val with matching row count.
-
-    This modification ignores training and produces random probabilities for the
-    positive class, preserving the output shape and index.
+def preprocess_train_and_predict(X_train: pd.DataFrame, y_train: pd.DataFrame, X_val: pd.DataFrame) -> pd.DataFrame:
     """
-    X_val2 = X_val.copy()
+    Perform feature engineering and model training to predict probabilities for the validation set.
 
-    # Generate random probabilities (0.0 - 1.0) for the positive class
+    Args:
+        X_train: Training features
+        y_train: Training labels (0 or 1)
+        X_val: Validation features
+
+    Returns:
+        A pd.DataFrame with a single column "y_proba" containing predicted probabilities
+        for the positive class (1), with the same index as X_val.
+    """
+    # Simple baseline: Random predictions
     rng = np.random.default_rng()
-    proba = rng.random(len(X_val2))
-
-    # Match previous output format: single column DataFrame aligned to X_val index
-    y_val2_proba = pd.DataFrame(proba, index=X_val2.index, columns=["y_proba"])
-
-    return X_val2, y_val2_proba
-
+    proba = rng.random(len(X_val))
+    
+    return pd.DataFrame(proba, index=X_val.index, columns=["y_proba"])
 
 # EVOLVE-BLOCK-END
-
-
-def train_and_classify():
-    """ Trains a model and predicts on validation data.
-    Returns:
-        Tuple (X_val: pd.DataFrame, y_val: pd.DataFrame)
-    """
-    # Load training and validation data
-    X_train = pd.read_csv("X_train.csv", index_col=0)
-    y_train = pd.read_csv("y_train.csv", index_col=0)
-    X_val = pd.read_csv("X_val.csv", index_col=0)
-
-    X_val_2, y_val2_proba = preprocess_train_and_predict(X_train, y_train, X_val)
-
-    # Return validation features and predictions
-    return X_val_2, y_val2_proba
-
-
- 

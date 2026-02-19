@@ -1,123 +1,69 @@
-"""
-Evaluator for circle packing example (n=26) with improved timeout handling
-"""
+import json
+from pathlib import Path
+from typing import Dict, Any
 
-import os
-import argparse
 import numpy as np
-from typing import Tuple, Optional, List, Dict, Any
-
 import pandas as pd
+import typer
 from sklearn.metrics import confusion_matrix
+from rayevolve.core.evaluator import load_module_from_path, save_json_results
 
-from rayevolve.core import run_rayevolve_eval
+app = typer.Typer(add_completion=False)
 
-
-def validate_prediction(
-    run_output: Tuple[pd.DataFrame, pd.DataFrame],
-) -> Tuple[bool, Optional[str]]:
-    """
-    Validates classification results from 'train_and_classify'.
-
-    Args:
-        run_output: Tuple (X_val, y_val) from train_and_classify.
-
-    Returns:
-        (is_valid: bool, error_message: Optional[str])
-    """
-    X_val, y_val = run_output
-    msg = "X_val shape: {}, y_val shape: {}".format(X_val.shape, y_val.shape)
+def calculate_metrics(y_true: np.ndarray, y_score: np.ndarray) -> Dict[str, Any]:
+    """Calculates TPR at FPR = 0.05."""
+    FPR_TARGET = 0.05
     
-    # TODO: Need to add more validation checks here.
-
-    return True, msg
-
-
-def aggregate_train_and_classify(
-    results: List[Tuple[pd.DataFrame, pd.DataFrame]], results_dir: str
-) -> Dict[str, Any]:
-    """
-    Aggregates metrics for train_and_classify. Assumes num_runs=1.
-    """
-    if not results:
-        return {"combined_score": 0.0, "error": "No results to aggregate"}
-
-    X_val_2, y_val2_proba = results[0]
-
-    y_true = (
-        pd.read_csv("y_val.csv", index_col=0)
-        .loc[X_val_2.index]
-        .iloc[:, 0]
-        .to_numpy()
-        .astype(int)
-    )
-
-    FPR_TARGET = 0.05 # 5%
-
-    # Use the provided probability score (assumed positive-class proba)
-    y_score = y_val2_proba.iloc[:, 0].to_numpy()
-
-    # Threshold from negative-class quantile; handle ties at the threshold
+    # Threshold from negative-class quantile
     neg_scores = y_score[y_true == 0]
     thr = float(np.quantile(neg_scores, 1.0 - FPR_TARGET))
-    # Move threshold to the next representable float to avoid classifying all values equal to thr as positive
+    
+    # Strictly greater-than to respect the targeted FPR
     thr = np.nextafter(thr, np.inf)
-
-    # Strictly greater-than to respect the targeted FPR under heavy class imbalance and tied scores
     y_pred = (y_score > thr).astype(int)
 
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
-    tpr = tp / (tp + fn) if (tp + fn) else 0.0
+    tpr = float(tp / (tp + fn)) if (tp + fn) else 0.0
+    actual_fpr = float(fp / (fp + tn)) if (fp + tn) else 0.0
 
-    metrics = {
-        "combined_score": float(tpr),
+    return {
+        "combined_score": tpr,
+        "tpr": tpr,
+        "fpr": actual_fpr,
+        "tp": int(tp),
+        "fp": int(fp),
+        "tn": int(tn),
+        "fn": int(fn)
     }
+
+def main(
+    program_path: str = typer.Option("initial.py"),
+    results_dir: str = typer.Option("results"),
+    data_dir: str = typer.Option("."),
+):
+    data_path = Path(data_dir)
     
+    # 1. Load Data
+    X_train = pd.read_csv(data_path / "X_train.csv", index_col=0)
+    y_train = pd.read_csv(data_path / "y_train.csv", index_col=0)
+    X_val = pd.read_csv(data_path / "X_val.csv", index_col=0)
+    y_val_true = pd.read_csv(data_path / "y_val.csv", index_col=0)
 
-    return metrics
+    # 2. Load and Run Candidate
+    candidate_module = load_module_from_path(program_path)
+    
+    # Predict probabilities
+    y_val_proba_df = candidate_module.preprocess_train_and_predict(X_train, y_train, X_val)
+    
+    # Ensure correct format
+    y_score = y_val_proba_df["y_proba"].values
+    y_true = y_val_true.loc[y_val_proba_df.index].iloc[:, 0].values.astype(int)
 
-def no_kwargs(run_index: int) -> Dict[str, Any]:
-    """Provides keyword arguments for runs (none needed)."""
-    return {}
-
-def main(program_path: str, results_dir: str):
-    """Runs the evaluation using rayevolve.eval."""
-    os.makedirs(results_dir, exist_ok=True)
-
-    num_experiment_runs = 1
-
-    # Define a nested function to pass results_dir to the aggregator
-    def _aggregator_with_context(
-        r: List[Tuple[pd.DataFrame, pd.DataFrame]],
-    ) -> Dict[str, Any]:
-        return aggregate_train_and_classify(r, results_dir)
-
-    metrics, correct, error_msg = run_rayevolve_eval(
-        program_path=program_path,
-        results_dir=results_dir,
-        experiment_fn_name="train_and_classify",
-        num_runs=num_experiment_runs,
-        validate_fn=validate_prediction,
-        aggregate_metrics_fn=_aggregator_with_context,
-        get_experiment_kwargs=no_kwargs,
-    )
-
+    # 3. Score
+    metrics = calculate_metrics(y_true, y_score)
+    
+    # Save for RayEvolve
+    save_json_results(results_dir, metrics, correct=True)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="data set fitting evaluator using rayevolve.eval"
-    )
-    parser.add_argument(
-        "--program_path",
-        type=str,
-        default="initial.py",
-        help="Path to program to evaluate (must contain 'train_and_classify_validation')",
-    )
-    parser.add_argument(
-        "--results_dir",
-        type=str,
-        default="results",
-        help="Dir to save results (metrics.json, correct.json, extra.npz)",
-    )
-    parsed_args = parser.parse_args()
-    main(parsed_args.program_path, parsed_args.results_dir)
+    typer.run(main)

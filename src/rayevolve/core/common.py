@@ -25,38 +25,24 @@ class EvolutionConfig:
 class DatabaseConfig:
     """Configuration for program database. ShinkEvolve code still needs to be
        removed from this component."""
-    num_islands: int = 4
+    num_islands: int = 1
     archive_size: int = 100
-
-    # Inspiration parameters
     elite_selection_ratio: float = 0.3  # Prop of elites inspirations
     num_archive_inspirations: int = 5  # No. inspiration programs
     num_top_k_inspirations: int = 2  # No. top-k inspiration programs
-
-    # Island model/migration parameters
     migration_interval: int = 10  # Migrate every N generations
     migration_rate: float = 0.1  # Prop. of island pop. to migrate
     island_elitism: bool = True  # Keep best prog on their islands
     enforce_island_separation: bool = (
         True  # Enforce full island separation for inspirations
     )
-
-    # Parent selection parameters
     parent_selection_strategy: str = (
         "power_law"  # "weighted"/"power_law" / "beam_search"
     )
-
-    # Power-law parent selection parameters
     exploitation_alpha: float = 1.0  # 0=uniform, 1=power-law
     exploitation_ratio: float = 0.2  # Chance to pick from archive
-
-    # Weighted tree parent selection parameters
     parent_selection_lambda: float = 10.0  # >0 sharpness of sigmoid
-
-    # Beam search parent selection parameters
     num_beams: int = 5
-
-    # Embedding model name
     embedding_model: str = "text-embedding-3-small"
 
 @dataclass(frozen=True)

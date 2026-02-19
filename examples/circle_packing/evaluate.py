@@ -2,23 +2,12 @@
 Evaluator for circle packing example (n=26) with improved timeout handling
 """
 
-import os
-import argparse
+import typer
 import numpy as np
-from typing import Tuple, Optional, List, Dict, Any
+from pathlib import Path
+from typing import Tuple, Optional
 
-from rayevolve.core import run_rayevolve_eval
-
-
-def format_centers_string(centers: np.ndarray) -> str:
-    """Formats circle centers into a multi-line string for display."""
-    return "\n".join(
-        [
-            f"  centers[{i}] = ({x_coord:.4f}, {y_coord:.4f})"
-            for i, (x_coord, y_coord) in enumerate(centers)
-        ]
-    )
-
+from rayevolve.core.evaluator import load_module_from_path, save_json_results
 
 def adapted_validate_packing(
     run_output: Tuple[np.ndarray, np.ndarray, float],
@@ -86,87 +75,33 @@ def adapted_validate_packing(
     return True, msg
 
 
-def get_circle_packing_kwargs(run_index: int) -> Dict[str, Any]:
-    """Provides keyword arguments for circle packing runs (none needed)."""
-    return {}
-
-
-def aggregate_circle_packing_metrics(
-    results: List[Tuple[np.ndarray, np.ndarray, float]], results_dir: str
-) -> Dict[str, Any]:
-    """
-    Aggregates metrics for circle packing. Assumes num_runs=1.
-    Saves extra.npz with detailed packing information.
-    """
-    if not results:
-        return {"combined_score": 0.0, "error": "No results to aggregate"}
-
-    centers, radii, reported_sum = results[0]
-
-    public_metrics = {
-        "centers_str": format_centers_string(centers),
-        "num_circles": centers.shape[0],
-    }
-    private_metrics = {
-        "reported_sum_of_radii": float(reported_sum),
-    }
-    metrics = {
-        "combined_score": float(reported_sum),
-        "public": public_metrics,
-        "private": private_metrics,
-    }
-
-    extra_file = os.path.join(results_dir, "extra.npz")
-    try:
-        np.savez(
-            extra_file,
-            centers=centers,
-            radii=radii,
-            reported_sum=reported_sum,
-        )
-    except Exception as e:
-        metrics["extra_npz_save_error"] = str(e)
-
-    return metrics
-
-
-def main(program_path: str, results_dir: str):
+def main(
+    program_path: str = typer.Option(
+        "initial.py",
+        help="Path to program to evaluate (must contain 'run_packing')",
+    ),
+    results_dir: str = typer.Option(
+        "results",
+        help="Dir to save results (metrics.json and correct.json)",
+    ),
+):
     """Runs the circle packing evaluation using rayevolve.eval."""
-    os.makedirs(results_dir, exist_ok=True)
+    results_path = Path(results_dir)
+    results_path.mkdir(parents=True, exist_ok=True)
 
-    num_experiment_runs = 1
+    module = load_module_from_path(program_path)
 
-    # Define a nested function to pass results_dir to the aggregator
-    def _aggregator_with_context(
-        r: List[Tuple[np.ndarray, np.ndarray, float]],
-    ) -> Dict[str, Any]:
-        return aggregate_circle_packing_metrics(r, results_dir)
+    centers, radii, reported_sum = module.run_packing()
+    is_valid, error_msg = adapted_validate_packing((centers, radii, reported_sum))
+    
+    if not is_valid:
+        print(error_msg)
 
-    metrics, correct, error_msg = run_rayevolve_eval(
-        program_path=program_path,
-        results_dir=results_dir,
-        experiment_fn_name="run_packing",
-        num_runs=num_experiment_runs,
-        get_experiment_kwargs=get_circle_packing_kwargs,
-        validate_fn=adapted_validate_packing,
-        aggregate_metrics_fn=_aggregator_with_context,
-    )
+    # Save metrics.json and correct.json.
+    save_json_results(results_dir, {"combined_score": float(reported_sum)}, is_valid, error_msg)
+
+app = typer.Typer(add_completion=False)
+app.command()(main)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Circle packing evaluator using rayevolve.eval"
-    )
-    parser.add_argument(
-        "--program_path",
-        type=str,
-        default="initial.py",
-        help="Path to program to evaluate (must contain 'run_packing')",
-    )
-    parser.add_argument(
-        "--results_dir",
-        type=str,
-        default="results",
-        help="Dir to save results (metrics.json, correct.json, extra.npz)",
-    )
-    parsed_args = parser.parse_args()
-    main(parsed_args.program_path, parsed_args.results_dir)
+    app()

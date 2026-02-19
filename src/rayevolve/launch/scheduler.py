@@ -145,9 +145,9 @@ class JobScheduler:
             *base,
             "python",
             "evaluate.py",
-            "--program_path",
+            "--program-path",
             exec_fname_t,
-            "--results_dir",
+            "--results-dir",
             results_dir_t,
         ]
 

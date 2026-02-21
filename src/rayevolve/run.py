@@ -92,6 +92,19 @@ def profiles(
         typer.echo(name)
 
 
+def _validate_port(ctx: typer.Context, param: typer.CallbackParam, value: int) -> int:
+    if not (1 <= value <= 65535):
+        raise typer.BadParameter("Port must be in range 1–65535")
+    return value
+
+
+def _normalize_nonempty(s: str | None) -> str | None:
+    if s is None:
+        return None
+    s = s.strip()
+    return s or None
+
+
 @app.command()
 def run(
     project_dir: str = typer.Argument(..., help="Path to project/data folder containing config.py"),
@@ -100,6 +113,23 @@ def run(
     run_name: str = typer.Option("run"),
     dry_run: bool = typer.Option(False),
     ray_debug: bool = typer.Option(False, help="Enable Ray debug env vars (RAY_DEBUG, RAY_DEBUG_POST_MORTEM)"),
+    ray_address: str | None = typer.Option(
+        None,
+        help=(
+            "Optional Ray Client address (ray://<host>:<port>). "
+            "If not provided, a local Ray runtime is started."
+        ),
+    ),
+    ray_ip: str | None = typer.Option(
+        None,
+        help="Alternative to --ray-address: specify Ray head IP/host.",
+    ),
+    ray_port: int = typer.Option(
+        10001,
+        callback=_validate_port,
+        help="Ray Client port (default: 10001). Only used with --ray-ip.",
+        show_default=True,
+    ),
 ):
     """
     Run rayevolve using the given profile from config.py in the specified project directory.
@@ -120,18 +150,43 @@ def run(
     if dry_run:
         return
 
-    env_vars = {}
+    env_vars: dict[str, str] = {}
     if ray_debug:
         env_vars["RAY_DEBUG"] = "1"
-        env_vars["RAY_DEBUG_POST_MORTEM"] = "1"
+        env_vars["RAY_DEBUG_POST_MORTEM"] = "1"  # fixed typo
 
     runtime_env = {"env_vars": env_vars} if env_vars else None
-    ray.init(runtime_env=runtime_env)
+
+    ray_address = _normalize_nonempty(ray_address)
+    ray_ip = _normalize_nonempty(ray_ip)
+
+    if ray_address and ray_ip:
+        raise typer.BadParameter("Use either --ray-address or --ray-ip/--ray-port, not both.")
+
+    # Initialize Ray
+    if ray_address:
+        if not ray_address.startswith("ray://"):
+            raise typer.BadParameter(
+                "Ray address must start with ray://, e.g. ray://127.0.0.1:10001"
+            )
+        ray.init(address=ray_address, runtime_env=runtime_env)
+
+    elif ray_ip:
+        ray.init(address=f"ray://{ray_ip}:{ray_port}", runtime_env=runtime_env)
+
+    else:
+        ray.init(runtime_env=runtime_env)
 
     try:
-        # TODO: Might want to use RayEvolveConfig eventually.
-        evo_runner = EvolutionRunner(cfg.evo, cfg.job, cfg.database, project_dir, verbose=True)
+        evo_runner = EvolutionRunner(
+            cfg.evo,
+            cfg.job,
+            cfg.database,
+            project_dir,
+            verbose=True,
+        )
         evo_runner.run_ray()
+
     finally:
         ray.shutdown()
 

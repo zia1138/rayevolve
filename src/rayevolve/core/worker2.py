@@ -7,7 +7,7 @@ from pathlib import Path
 from subprocess import Popen
 import ray
 
-from rayevolve.launch.scheduler import JobScheduler
+from rayevolve.launch.ray_backend import RayExecutionBackend
 from rayevolve.database.dbase import ProgramDatabase, Program
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 
@@ -43,23 +43,6 @@ class StrategyProbs(BaseModel):
         if total <= 0:
             raise ValueError("All probabilities are zero or negative")
         return {k: v / total for k, v in weights.items()}
-
-
-
-def clear_results_dir(results_dir: str) -> None:
-    """
-    Remove all files inside results_dir, keeping the folder itself.
-    Safe to call if the directory does not exist.
-    """
-    p = Path(results_dir)
-    if not p.exists():
-        return
-    for child in p.iterdir():
-        try:
-            if child.is_file() or child.is_symlink():
-                child.unlink()
-        except Exception as e:
-            logger.warning(f"Failed to delete {child}: {e}")
 
 
 class EvolveBlock(BaseModel):
@@ -181,7 +164,7 @@ class EvoWorker:
                  gen: EvoGen,
                  evo_config: EvolutionConfig, 
                  job_config: JobConfig,
-                 project_dir: str,
+                 project_zip_bytes: bytes,
                  results_dir: str,
                  db: ProgramDatabase, 
                  verbose: bool):
@@ -189,14 +172,14 @@ class EvoWorker:
         self.worker_id = worker_id
         self.gen = gen
         self.evo_config = evo_config
-        self.project_dir = project_dir
+        self.project_zip_bytes = project_zip_bytes
         self.results_dir = results_dir
         self.db = db
         self.verbose = verbose
 
-        self.scheduler = JobScheduler(
-            project_dir=self.project_dir,
-            config=job_config,  # type: ignore
+        self.backend = RayExecutionBackend(
+            project_zip_bytes=self.project_zip_bytes,
+            config=job_config,
             verbose=verbose,
         )
 
@@ -304,9 +287,7 @@ class EvoWorker:
 
 
     def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
-        exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
-        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
+        exec_fname_rel = f"main.{self.lang_ext}"
 
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         evolve_block = extract_evolve_block(parent.code)
@@ -350,8 +331,10 @@ class EvoWorker:
                 program: Code for the program that achieved a higher score.
             """            
             evo_program = ctx.deps.evolve_block.reconstruct(program)
-            Path(exec_fname).write_text(evo_program, "utf-8")
-            results, rtime = self.scheduler.run(exec_fname, results_dir)
+            results, rtime = self.backend.run_job(
+                generated_code=evo_program,
+                exec_fname_rel=exec_fname_rel
+            )
             
             if results['correct']['correct']: 
                 combined = results.get("metrics", {}).get("combined_score")
@@ -373,13 +356,10 @@ class EvoWorker:
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:
-                        clear_results_dir(results_dir)
                         raise ModelRetry("Improved program did not achieve a higher score on submission. Analyze why it failed and fix the issue.")
                 else:
-                    clear_results_dir(results_dir)
                     raise ModelRetry("Improved program did not return a score on submission. Analyze why this happened and fix the issue.")
             else:
-                clear_results_dir(results_dir)
                 raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue. Here is the error:", results.get("error", "Unknown Error"))
 
         evo_exploit = Agent(
@@ -405,8 +385,11 @@ class EvoWorker:
                 return "You must use `probe` to gather information that will help you improve the program before another run_experiment." 
             ctx.deps.probe_needed = True
 
-            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(program), "utf-8")
-            results, rtime = self.scheduler.run(exec_fname, results_dir)
+            evo_program = ctx.deps.evolve_block.reconstruct(program)
+            results, rtime = self.backend.run_job(
+                generated_code=evo_program,
+                exec_fname_rel=exec_fname_rel
+            )
 
             out_str = ""
             if results['correct']['correct']:
@@ -438,9 +421,7 @@ class EvoWorker:
                 out_str += "```\n"
                 out_str += stderr + "\n"
                 out_str += "```\n"
-                
-            # NOTE: This is an issue for any concurrency in this agent.
-            clear_results_dir(results_dir)
+
             return out_str
 
         @evo_exploit.tool(retries=3)
@@ -479,8 +460,11 @@ class EvoWorker:
             # Without this, probes run against a bare skeleton and crash on
             # missing names like np.column_stack on an empty list.
             full_probe = ctx.deps.evolve_block.inner_content + "\n" + probe_code
-            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(full_probe), "utf-8")
-            results, rtime = self.scheduler.run(exec_fname, results_dir)
+            evo_program = ctx.deps.evolve_block.reconstruct(full_probe)
+            results, rtime = self.backend.run_job(
+                generated_code=evo_program,
+                exec_fname_rel=exec_fname_rel
+            )
 
             out_str = ""
             stdout = results.get("stdout_log", "").strip()
@@ -504,7 +488,6 @@ class EvoWorker:
             else:
                 out_str += "Use this information to improve the program in your next attempt. If there was an error, rerun the `probe` tool.\n"
             # NOTE: This is an issue for any concurrency in this agent.
-            clear_results_dir(results_dir)
             return out_str
 
         try:
@@ -517,9 +500,7 @@ class EvoWorker:
 
             
     def agent_explore(self, current_gen: int, parent_selection_top_k: int, explore_performance_floor: float):            
-        exec_fname = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/main.{self.lang_ext}"
-        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_{current_gen}/results"
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
+        exec_fname_rel = f"main.{self.lang_ext}"
 
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         inference_start = time.time()
@@ -585,8 +566,10 @@ class EvoWorker:
                     refactoring, control-flow alteration, etc.). 
             """
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
-            Path(exec_fname).write_text(evo_program, "utf-8")
-            results, rtime = self.scheduler.run(exec_fname, results_dir)
+            results, rtime = self.backend.run_job(
+                generated_code=evo_program,
+                exec_fname_rel=exec_fname_rel
+            )
 
             if results['correct']['correct']: 
                 combined = results.get("metrics", {}).get("combined_score")
@@ -608,13 +591,10 @@ class EvoWorker:
                         )
                         ray.get(self.db.add.remote(db_program))
                     else:
-                        clear_results_dir(results_dir)
                         raise ModelRetry("Novel program did not achieve the minimum score on submission.  Analyze why it failed and fix the issue.")
                 else:
-                    clear_results_dir(results_dir)
                     raise ModelRetry("Novel program did not return a score on submission. Analyze why this happened and fix the issue.")
             else:
-                clear_results_dir(results_dir)
                 raise ModelRetry("Novel program was not correct on submission. Analyze why this happened and fix the issue. Here is the error: " + results.get("error", "Unknown Error"))
 
         evo_explore = Agent(
@@ -652,8 +632,10 @@ class EvoWorker:
             ctx.deps.probe_needed = True
 
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
-            Path(exec_fname).write_text(evo_program, "utf-8")
-            results, rtime = self.scheduler.run(exec_fname, results_dir)
+            results, rtime = self.backend.run_job(
+                generated_code=evo_program,
+                exec_fname_rel=exec_fname_rel
+            )
 
             out_str = ""
             if results['correct']['correct']:
@@ -686,8 +668,6 @@ class EvoWorker:
                 out_str += stderr + "\n"
                 out_str += "```\n"
 
-            # NOTE: This is an issue for any concurrency in this agent.
-            clear_results_dir(results_dir)            
             return out_str
 
         @evo_explore.tool
@@ -776,8 +756,11 @@ class EvoWorker:
             ctx.deps.probe_needed = False
             # Probe inherits the parent's EVOLVE-BLOCK (same fix as exploit probe).
             full_probe = ctx.deps.evolve_block.inner_content + "\n" + probe_code
-            Path(exec_fname).write_text(ctx.deps.evolve_block.reconstruct(full_probe), "utf-8")
-            results, rtime = self.scheduler.run(exec_fname, results_dir)
+            evo_program = ctx.deps.evolve_block.reconstruct(full_probe)
+            results, rtime = self.backend.run_job(
+                generated_code=evo_program,
+                exec_fname_rel=exec_fname_rel
+            )
 
             out_str = ""
             stdout = results.get("stdout_log", "").strip()
@@ -799,8 +782,7 @@ class EvoWorker:
                 raise ModelRetry(f"Probe failed with error:\n{stderr[:1000]}\nFix the probe code and try again.")
             else:
                 out_str += "Use this information to help find a novel program in your next attempt. If there was an error, rerun the `probe` tool.\n"
-            # NOTE: This is an issue for any concurrency in this agent.
-            clear_results_dir(results_dir)
+
             return out_str
 
         try:

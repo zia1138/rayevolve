@@ -69,7 +69,7 @@ def evaluate_candidate(candidate_module, dataset_dir: Path) -> Dict[str, Any]:
     return {"combined_score": total_score, "valid": all_valid}
 
 def main(
-    program_path: str = typer.Option("initial.py"),
+    program_path: str = typer.Option("main.py"),
     results_dir: str = typer.Option("results"),
     dataset_dir: str = typer.Option("./data"),
 ):

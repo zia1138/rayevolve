@@ -77,11 +77,11 @@ def adapted_validate_packing(
 
 def main(
     program_path: str = typer.Option(
-        "initial.py",
+        "main.py",
         help="Path to program to evaluate (must contain 'run_packing')",
     ),
     results_dir: str = typer.Option(
-        "results",
+        "./",
         help="Dir to save results (metrics.json and correct.json)",
     ),
 ):

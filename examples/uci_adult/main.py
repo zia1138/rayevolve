@@ -37,7 +37,7 @@ def calculate_metrics(y_true: np.ndarray, y_score: np.ndarray) -> Dict[str, Any]
     }
 
 def main(
-    program_path: str = typer.Option("initial.py"),
+    program_path: str = typer.Option("main.py"),
     results_dir: str = typer.Option("results"),
     data_dir: str = typer.Option("."),
 ):

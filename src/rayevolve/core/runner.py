@@ -1,4 +1,4 @@
-import shutil
+import time
 import uuid
 import logging
 from rich.logging import RichHandler
@@ -6,16 +6,16 @@ from typing import List, Optional, Union, cast
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from subprocess import Popen
 import ray
 from rayevolve.database.dbase import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
-from rayevolve.launch.scheduler import JobScheduler
+from rayevolve.launch.ray_backend import RayExecutionBackend
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
+## NOTE: EvolutionRunner still runs in the ray driver. 
 class EvolutionRunner:
     def __init__(
         self,
@@ -73,15 +73,13 @@ class EvolutionRunner:
         if self.evo_config.results_dir is not None and db_path.exists():
             self.resuming_run = True
 
-        # Initialize database and scheduler
         self.db = ProgramDatabase.remote(
             db_path_str=str(db_path),
             config=db_config
         )
 
-        # TODO: Move to better scheduler here. This abstraction may not be needed.
-        self.scheduler = JobScheduler(
-            config=job_config,  # type: ignore
+        self.backend = RayExecutionBackend(
+            config=job_config,
             project_dir=self.project_dir,
             verbose=verbose,
         )
@@ -120,12 +118,15 @@ class EvolutionRunner:
                 gen,
                 self.evo_config,
                 self.job_config,
-                self.project_dir,
+                self.backend.project_zip_bytes,
                 self.results_dir,
                 self.db,
                 self.verbose,
             )
             all_refs.append(worker.run.remote())
+
+        # TODO: Need to seralize the database here occasionally so restart is possible.
+        # TODO: Collect state from the workers and the database.
 
         # Now wait for ALL workers to finish
         ray.get(all_refs)
@@ -133,33 +134,27 @@ class EvolutionRunner:
 
     def _run_generation_0(self):
         """Setup and run generation 0 to initialize the database."""
-        initial_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0"
-        Path(initial_dir).mkdir(parents=True, exist_ok=True)
-        exec_fname = f"{initial_dir}/main.{self.lang_ext}"
-        results_dir = f"{self.results_dir}/{FOLDER_PREFIX}_0/results"
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
-
         if self.verbose:
             logger.info(
-                f"Copying initial program from {self.project_dir}/initial.py"
+                f"Reading initial program from {self.project_dir}/main.py"
             )
-        shutil.copy(f"{self.project_dir}/initial.py", exec_fname)
-
-        # Run the evaluation code.
-        results, rtime = self.scheduler.run(exec_fname, results_dir)
-
-        # Read the evaluated code for database insertion
+        
         try:
-            evaluated_code = Path(exec_fname).read_text(encoding="utf-8")
+            initial_code = Path(f"{self.project_dir}/main.py").read_text(encoding="utf-8")
         except Exception as e:
-            logger.warning(f"Could not read code for job {exec_fname}. Error: {e}")
-            evaluated_code = ""
+            raise ValueError(f"Could not read initial program from {self.project_dir}/main.py. Error: {e}")
+
+        # Run the evaluation code using the Ray backend.
+        results, rtime = self.backend.run_job(
+            generated_code=initial_code,
+            exec_fname_rel=f"main.{self.lang_ext}"
+        )
 
         if results['correct']['correct']: 
             combined = results.get("metrics", {}).get("combined_score")
             db_program = Program(
                 id=str(uuid.uuid4()),
-                code=evaluated_code,
+                code=initial_code,
                 parent_id=None,
                 generation=0,
                 code_diff="initial",
@@ -176,5 +171,4 @@ class EvolutionRunner:
             ray.get(self.db.add.remote(db_program, verbose=True))
         else:
             raise ValueError("Initial program is not correct. Please fix the initial program and try again.")
-    
     

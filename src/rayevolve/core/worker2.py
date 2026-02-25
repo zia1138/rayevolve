@@ -8,7 +8,7 @@ from subprocess import Popen
 import ray
 
 from rayevolve.launch.ray_backend import RayExecutionBackend
-from rayevolve.database.dbase import ProgramDatabase, Program
+from rayevolve.database.dbase2 import ProgramDatabase, Program
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 
 import textwrap

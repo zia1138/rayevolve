@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 import ray
-from rayevolve.database.dbase import ProgramDatabase, Program
+from rayevolve.database.dbase2 import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
 from rayevolve.launch.ray_backend import RayExecutionBackend

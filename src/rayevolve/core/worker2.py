@@ -291,7 +291,7 @@ class EvoWorker:
             The code below has achieved a score of **{score}**. Your goal is to beat this score.
            
             ### CODE
-            ```{self.evo_config.lang_identifier}                             
+            ```{lang_identifier}                             
             {code}
             ```
             1. **Analyze:** Analyze the code above and come up with an approach to improve the score.
@@ -312,7 +312,9 @@ class EvoWorker:
             - If you cannot beat the score of the above code after 5 distinct approaches, give up and offer an explanation why.
          """)
 
-        exploit_prompt = exploit_template.format(code=evolve_block.inner_content, score=parent.combined_score)
+        exploit_prompt = exploit_template.format(code=evolve_block.inner_content, 
+                                                 score=parent.combined_score,
+                                                 lang_identifier=self.evo_config.lang_identifier) 
 
         model = GoogleModel('gemini-3-flash-preview')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})
@@ -509,7 +511,7 @@ class EvoWorker:
             or architectural patterns, or parameterization, etc.
            
             ### CODE
-            ```{self.evo_config.lang_identifier}
+            ```{lang_identifier}
             {code}
             ```
                                          
@@ -542,7 +544,8 @@ class EvoWorker:
 
         explore_prompt = explore_template.format(code=evolve_block.inner_content,
                                                 score=parent.combined_score,
-                                                floor_score=floor_score)
+                                                floor_score=floor_score,
+                                                lang_identifier=self.evo_config.lang_identifier)
 
         model = GoogleModel('gemini-3-flash-preview')
         settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})

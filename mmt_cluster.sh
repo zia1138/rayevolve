@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="/teamspace/studios/this_studio/rayevolve/examples/circle_packing"
+# Script for launching a ray cluster on lighting AI studios multimachine clusters (MMT).
+# See https://lightning.ai/docs/overview/multi-node-training/cli-commands.
+# This should work in other similar cluster setups with a head node and worker nodes
+# that is compatible with `torchrun`. 
+# 1. Install lightnigng AI studios SDK within the uv environment:
+#    cd rayevolve && uv sync
+#    source .venv/bin/activate
+#    uv pip install lightning-sdk
+# 2. Then launch an MMT cluster using the following command:
+#   `lightning run mmt --command="/teamspace/studios/this_studio/rayevolve/mmt_cluster.sh"`
 
 : "${MASTER_ADDR:?need MASTER_ADDR}"
 
@@ -15,8 +24,6 @@ RAY_PORT="${RAY_PORT:-6379}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-8265}"
 NODE_IP="${NODE_IP:-$(hostname -I | awk '{print $1}')}"
 MASTER_IP="$(getent hosts "${MASTER_ADDR}" | awk '{print $1}' || echo "${MASTER_ADDR}")"
-
-cd "${PROJECT_DIR}"
 
 is_head=0
 if [[ "${NODE_IP}" == "${MASTER_IP}" ]] || [[ "$(hostname)" == "${MASTER_ADDR}" ]]; then

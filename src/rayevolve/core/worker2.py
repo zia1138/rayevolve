@@ -577,7 +577,6 @@ class EvoWorker:
                             parent_id=parent.id,
                             generation=current_gen,
                             code_diff="agent_explore",
-                            embedding=[],
                             correct=True,
                             combined_score=combined,
                             metadata={

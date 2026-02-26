@@ -14,12 +14,16 @@ class EvolutionConfig:
         num_agent_workers: Number of agent workers to use.
         max_generations: Maximum number of program generations to evolve.
         force_probing: Whether to force probing of evo block during multi-turn loop for EvoExplore/EvoExploit.
+        lang_identifier: Language used for any LLM code blocks (e.g. ```python ... ```). 
+        evo_file: Name of the file to use for the evo block. Default is main.py.
     """
     results_dir: Optional[str] = None
     task_sys_msg: str =  ""
     num_agent_workers: int = 4
     max_generations: int = 50
     force_probing: bool = False 
+    lang_identifier: str = "python" 
+    evo_file: str = "main.py"
 
 
 class DatabaseConfig:

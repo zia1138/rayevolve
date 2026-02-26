@@ -9,7 +9,7 @@ import ray
 
 from rayevolve.launch.ray_backend import RayExecutionBackend
 from rayevolve.database.dbase2 import ProgramDatabase, Program
-from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
+from .common import EvolutionConfig, JobConfig, DatabaseConfig
 
 import textwrap
 
@@ -183,10 +183,6 @@ class EvoWorker:
             verbose=verbose,
         )
 
-        # TODO: Need to handle extension of output files since trying to make
-        # code language agnostic.
-        self.lang_ext = "py"
-
         # TODO: Need to handle logfire config more cleanly.
         logfire.configure(scrubbing=False)
         logfire.instrument_pydantic_ai()
@@ -287,8 +283,6 @@ class EvoWorker:
 
 
     def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
-        exec_fname_rel = f"main.{self.lang_ext}"
-
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         evolve_block = extract_evolve_block(parent.code)
         inference_start = time.time()
@@ -297,7 +291,7 @@ class EvoWorker:
             The code below has achieved a score of **{score}**. Your goal is to beat this score.
            
             ### CODE
-            ```python                             
+            ```{self.evo_config.lang_identifier}                             
             {code}
             ```
             1. **Analyze:** Analyze the code above and come up with an approach to improve the score.
@@ -333,7 +327,7 @@ class EvoWorker:
             evo_program = ctx.deps.evolve_block.reconstruct(program)
             results, rtime = self.backend.run_job(
                 generated_code=evo_program,
-                exec_fname_rel=exec_fname_rel
+                exec_fname_rel=self.evo_config.evo_file
             )
             
             if results['correct']['correct']: 
@@ -388,7 +382,7 @@ class EvoWorker:
             evo_program = ctx.deps.evolve_block.reconstruct(program)
             results, rtime = self.backend.run_job(
                 generated_code=evo_program,
-                exec_fname_rel=exec_fname_rel
+                exec_fname_rel=self.evo_config.evo_file
             )
 
             out_str = ""
@@ -463,7 +457,7 @@ class EvoWorker:
             evo_program = ctx.deps.evolve_block.reconstruct(full_probe)
             results, rtime = self.backend.run_job(
                 generated_code=evo_program,
-                exec_fname_rel=exec_fname_rel
+                exec_fname_rel=self.evo_config.evo_file
             )
 
             out_str = ""
@@ -500,7 +494,6 @@ class EvoWorker:
 
             
     def agent_explore(self, current_gen: int, parent_selection_top_k: int, explore_performance_floor: float):            
-        exec_fname_rel = f"main.{self.lang_ext}"
 
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         inference_start = time.time()
@@ -516,7 +509,7 @@ class EvoWorker:
             or architectural patterns, or parameterization, etc.
            
             ### CODE
-            ```python
+            ```{self.evo_config.lang_identifier}
             {code}
             ```
                                          
@@ -568,7 +561,7 @@ class EvoWorker:
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             results, rtime = self.backend.run_job(
                 generated_code=evo_program,
-                exec_fname_rel=exec_fname_rel
+                exec_fname_rel=self.evo_config.evo_file
             )
 
             if results['correct']['correct']: 
@@ -634,7 +627,7 @@ class EvoWorker:
             evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             results, rtime = self.backend.run_job(
                 generated_code=evo_program,
-                exec_fname_rel=exec_fname_rel
+                exec_fname_rel=self.evo_config.evo_file
             )
 
             out_str = ""
@@ -759,7 +752,7 @@ class EvoWorker:
             evo_program = ctx.deps.evolve_block.reconstruct(full_probe)
             results, rtime = self.backend.run_job(
                 generated_code=evo_program,
-                exec_fname_rel=exec_fname_rel
+                exec_fname_rel=self.evo_config.evo_file
             )
 
             out_str = ""

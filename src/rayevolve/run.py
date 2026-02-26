@@ -14,6 +14,11 @@ app = typer.Typer()
 
 
 def load_config_file(config_file: Path) -> dict:
+    """
+    We use a code as config system so runpy runs config.py to populate the namespace.
+    We expect config.py to define at least get_config(profile) and list_profiles() functions. 
+    The rest is up to the user.
+    """
     if not config_file.exists():
         raise typer.BadParameter(f"Config file not found: {config_file}")
     return runpy.run_path(str(config_file))

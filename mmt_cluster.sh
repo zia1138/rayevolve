@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="/teamspace/studios/this_studio/ds_mlr"
+PROJECT_DIR="/teamspace/studios/this_studio/rayevolve/examples/circle_packing"
 
 : "${MASTER_ADDR:?need MASTER_ADDR}"
 

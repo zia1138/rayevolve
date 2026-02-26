@@ -28,15 +28,14 @@ parameters.
 - [ ] add multiple model support (try to get to 2.635 on circle packing)
 
 ## Important but not urgent
-- [ ] simplify and clean up SQLlite datatabase actor
 - [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement
 - [ ] handle runtime timeouts correctly (took too long to run)
 - [ ] identify codebaes and projects with good evaluators + benchmarks to migrate into tool
-- [ ] need to clean up and add additiona logging information, confirm logging works correctly
+- [ ] handle logging correctly on ray cluster (get logs to driver somehow)
 
 ## Algorithmic Ideas
 - [ ] dynamically optimizing and updating the system prompt based on where the system is getting stuck
-- [ ] add a metaoptimizer to get the system unstuck and adds strategic guidance 
+- [ ] add a meta-optimizer to get the system unstuck and adds strategic guidance 
 - [ ] for exploit/explore improve probe functionality, not clear it is always useful
 
 # Related Open Source Projects

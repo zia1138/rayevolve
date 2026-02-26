@@ -84,10 +84,8 @@ class EvolutionRunner:
             verbose=verbose,
         )
         
-        # TODO: Need to handle extension of output files since trying to make
-        # code language agnostic.
-        self.lang_ext = "py"
-
+        # TODO: Run resume doesn't work right now with new database code.
+        # Need to handle resume more elegantly.
         if self.resuming_run:
             completed_generations:int = ray.get(self.db.get_last_iteration.remote()) 
             logger.info("=" * 80)
@@ -126,7 +124,8 @@ class EvolutionRunner:
             all_refs.append(worker.run.remote())
 
         # TODO: Need to seralize the database here occasionally so restart is possible.
-        # TODO: Collect state from the workers and the database.
+        # TODO: Collect state from the workers. They will keep the submitted .zip files in memory.
+        #       This keeps us from moving too much around.
 
         # Now wait for ALL workers to finish
         ray.get(all_refs)
@@ -136,18 +135,18 @@ class EvolutionRunner:
         """Setup and run generation 0 to initialize the database."""
         if self.verbose:
             logger.info(
-                f"Reading initial program from {self.project_dir}/main.py"
+                f"Reading initial program from {self.project_dir}/{self.evo_config.evo_file}"
             )
         
         try:
-            initial_code = Path(f"{self.project_dir}/main.py").read_text(encoding="utf-8")
+            initial_code = Path(f"{self.project_dir}/{self.evo_config.evo_file}").read_text(encoding="utf-8")
         except Exception as e:
-            raise ValueError(f"Could not read initial program from {self.project_dir}/main.py. Error: {e}")
+            raise ValueError(f"Could not read initial program from {self.project_dir}/{self.evo_config.evo_file}. Error: {e}")
 
         # Run the evaluation code using the Ray backend.
         results, rtime = self.backend.run_job(
             generated_code=initial_code,
-            exec_fname_rel=f"main.{self.lang_ext}"
+            exec_fname_rel=self.evo_config.evo_file
         )
 
         if results['correct']['correct']: 

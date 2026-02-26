@@ -64,16 +64,6 @@ class Program:
     correct: bool = False
     children_count: int = 0
 
-    # Derived features
-    complexity: float = 0.0
-    embedding: List[float] = field(default_factory=list)
-    embedding_pca_2d: List[float] = field(default_factory=list)
-    embedding_pca_3d: List[float] = field(default_factory=list)
-    embedding_cluster_id: Optional[int] = None
-
-    # Migration history
-    migration_history: List[Dict[str, Any]] = field(default_factory=list)
-
     # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -97,18 +87,6 @@ class Program:
 
         top_k_ids_val = data.get("top_k_inspiration_ids")
         data["top_k_inspiration_ids"] = top_k_ids_val if isinstance(top_k_ids_val, list) else []
-
-        embedding_val = data.get("embedding")
-        data["embedding"] = embedding_val if isinstance(embedding_val, list) else []
-
-        embedding_pca_2d_val = data.get("embedding_pca_2d")
-        data["embedding_pca_2d"] = embedding_pca_2d_val if isinstance(embedding_pca_2d_val, list) else []
-
-        embedding_pca_3d_val = data.get("embedding_pca_3d")
-        data["embedding_pca_3d"] = embedding_pca_3d_val if isinstance(embedding_pca_3d_val, list) else []
-
-        migration_history_val = data.get("migration_history")
-        data["migration_history"] = migration_history_val if isinstance(migration_history_val, list) else []
 
         program_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_data = {k: v for k, v in data.items() if k in program_fields}

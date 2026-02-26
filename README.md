@@ -67,8 +67,8 @@ parameters.
 
 # rayevolve on Lightning AI Studios
 
-We provide a script [mmt_cluster.sh](mmt_cluster.sh) to launch a ray cluster on Lightning AI Studios using 
-multimachine training (MMT).
+We provide a script [mmt_cluster.sh](mmt_cluster.sh) to launch a ray cluster on [Lightning AI Studios](https://lightning.ai) using 
+[multimachine training](https://lightning.ai/docs/overview/multi-node-training/cli-commands) (MMT).
 
 Install Lightning AI Studios SDK within the uv environment:
 ```bash

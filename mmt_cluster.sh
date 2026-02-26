@@ -16,6 +16,8 @@ set -euo pipefail
 
 : "${MASTER_ADDR:?need MASTER_ADDR}"
 
+cd /teamspace/studios/this_studio/rayevolve
+
 # Fail fast if nc is not installed
 if ! command -v nc >/dev/null 2>&1; then
   echo "ERROR: 'nc' (netcat) is required but not installed or not in PATH." >&2

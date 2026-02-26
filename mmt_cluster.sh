@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
 # Script for launching a ray cluster on lighting AI studios multimachine clusters (MMT).
 # See https://lightning.ai/docs/overview/multi-node-training/cli-commands.
 # This should work in other similar cluster setups with a head node and worker nodes
 # that is compatible with `torchrun`. 
+#
 # 1. Install lightnigng AI studios SDK within the uv environment:
 #    cd rayevolve && uv sync
 #    source .venv/bin/activate

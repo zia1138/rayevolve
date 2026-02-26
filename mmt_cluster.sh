@@ -11,7 +11,10 @@ set -euo pipefail
 #    cd rayevolve && uv sync
 #    source .venv/bin/activate
 #    uv pip install lightning-sdk
-# 2. Then launch an MMT cluster using the following command:
+# 2. Authenticate logfire and select rayevolve project:
+#    logfire auth
+#    logfire projects use rayevolve
+# 3. Then launch an MMT cluster using the following command:
 #   `lightning run mmt --command="/teamspace/studios/this_studio/rayevolve/mmt_cluster.sh"`
 
 : "${MASTER_ADDR:?need MASTER_ADDR}"

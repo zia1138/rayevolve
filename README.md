@@ -4,6 +4,25 @@ Experimental project for LLM guided algorithm design and evolution built on [ray
 [pydantic-ai](https://github.com/pydantic/pydantic-ai), and [logfire](https://github.com/pydantic/logfire).
 Originally started as an in-place fork from [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 
+# Installation
+
+Clone the repo and setup a `uv` environment as follows:
+```bash
+git clone git@github.com:zia1138/rayevolve.git
+cd rayevolve
+uv sync
+source .venv/bin/activate
+```
+
+Create an account and project called `rayevolve` on [logfire](https://github.com/pydantic/logfire). 
+You will need to authenticate to logfire and select the `rayevolve` project to log your runs. You can do this as follows:
+```bash
+logfire auth
+logfire projects use rayevolve
+```
+
+# Quickstart Instructions
+
 You can run the circle packing example using the configs in `examples/circlepacking/config.py` with the `default` profile as follows:
 ```bash
 rayevolve run examples/circle_packing
@@ -45,6 +64,33 @@ parameters.
 * [GigaEvo](https://github.com/AIRI-Institute/gigaevo-platform/tree/main)
 * [station](https://github.com/dualverse-ai/station)
 * [CSE/EvoControl](https://github.com/QuantaAlpha/EvoControl)
+
+# rayevolve on Lightning AI Studios
+
+We provide a script [mmt_cluster.sh](mmt_cluster.sh) to launch a ray cluster on Lightning AI Studios using 
+multimachine training (MMT).
+
+Install Lightning AI Studios SDK within the uv environment:
+```bash
+cd rayevolve && uv sync
+source .venv/bin/activate
+uv pip install lightning-sdk
+```
+Authenticate logfire and select rayevolve project:
+```bash
+logfire auth
+logfire projects use rayevolve
+```
+Then launch an MMT cluster using the following command:
+```bash
+lightning run mmt --command="/teamspace/studios/this_studio/rayevolve/mmt_cluster.sh"
+```
+Run it on the ray cluster using 
+```bash
+rayevolve run examples/circle_packing --ray-ip x.x.x.x
+```
+where x.x.x.x is the IP address of the ray cluster head node, which you can find from the log output
+on Lightning AI Studios.
 
 # debugging in ray
 

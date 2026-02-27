@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, asdict
 import ray
 from rayevolve.core.dbase2 import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
-from .common import EvolutionConfig, DatabaseConfig, JobConfig
+from .common import EvolutionConfig, BackendConfig
 from rayevolve.launch.ray_backend import RayExecutionBackend
 
 # Set up logging
@@ -22,14 +22,12 @@ class EvolutionRunner:
     def __init__(
         self,
         evo_config: EvolutionConfig,
-        job_config: JobConfig,
-        db_config: DatabaseConfig,
+        backend_config: BackendConfig,
         project_dir: str, 
         verbose: bool = False,
     ):
         self.evo_config = evo_config
-        self.job_config = job_config
-        self.db_config = db_config
+        self.backend_config = backend_config
         self.project_dir = project_dir
         self.verbose = verbose
 
@@ -76,12 +74,11 @@ class EvolutionRunner:
             self.resuming_run = True
 
         self.db = ProgramDatabase.remote(
-            db_path_str=str(db_path),
-            config=db_config
+            db_path_str=str(db_path)
         )
 
         self.backend = RayExecutionBackend(
-            config=job_config,
+            config=backend_config,
             project_dir=self.project_dir,
             verbose=verbose,
         )
@@ -117,7 +114,7 @@ class EvolutionRunner:
                 str(worker_id),
                 gen,
                 self.evo_config,
-                self.job_config,
+                self.backend_config,
                 self.backend.project_zip_bytes,
                 self.results_dir,
                 self.db,

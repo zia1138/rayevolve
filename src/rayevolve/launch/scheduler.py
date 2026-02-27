@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from rayevolve.core.common import JobConfig
+from rayevolve.core.common import BackendConfig
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ def run_local(
 
 
 class JobScheduler:
-    def __init__(self, config: JobConfig, project_dir: str, verbose: bool = True):
+    def __init__(self, config: BackendConfig, project_dir: str, verbose: bool = True):
         self.config = config
         self.project_dir = project_dir
         self.verbose = verbose

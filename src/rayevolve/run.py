@@ -43,7 +43,7 @@ def resolve_config_file(project: str) -> Path:
 
 DEFAULT_CONFIG_TEMPLATE = """\
 # Import config classes from rayevolve.core
-from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, DatabaseConfig, JobConfig
+from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, BackendConfig
 
 def list_profiles() -> list[str]:
     \"\"\"List available configuration profiles to display on CLI.\"\"\"
@@ -54,8 +54,7 @@ def get_config(profile: str = "default") -> RayEvolveConfig:
     if profile == "default":
         return RayEvolveConfig(
             evo=EvolutionConfig(),
-            database=DatabaseConfig(),
-            job=JobConfig(),
+            backend=BackendConfig(),
         )
     raise ValueError(f"Unknown profile: {profile}")
 """
@@ -185,8 +184,7 @@ def run(
     try:
         evo_runner = EvolutionRunner(
             cfg.evo,
-            cfg.job,
-            cfg.database,
+            cfg.backend,
             project_dir,
             verbose=True,
         )

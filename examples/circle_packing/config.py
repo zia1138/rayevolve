@@ -1,5 +1,5 @@
 # Import config classes from rayevolve.core
-from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, DatabaseConfig, JobConfig
+from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, BackendConfig
 import textwrap
 
 def list_profiles() -> list[str]:
@@ -43,15 +43,13 @@ def get_config(profile: str = "default") -> RayEvolveConfig:
     if profile == "default":
         return RayEvolveConfig(
             evo=EvolutionConfig(task_sys_msg=SYSTEM_MSG_SCIPY),
-            database=DatabaseConfig(),
-            job=JobConfig(),
+            backend=BackendConfig(),
         )
     
     if profile == "default_noscipy":
         return RayEvolveConfig(
             evo=EvolutionConfig(task_sys_msg=SYSTEM_MSG),
-            database=DatabaseConfig(),
-            job=JobConfig(),
+            backend=BackendConfig(),
         )
 
     raise ValueError(f"Unknown profile: {profile}")

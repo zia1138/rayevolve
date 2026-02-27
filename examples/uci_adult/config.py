@@ -1,5 +1,5 @@
 # Import config classes from rayevolve.core
-from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, DatabaseConfig, JobConfig
+from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, BackendConfig
 import textwrap
 
 SYSTEM_MSG = textwrap.dedent("""\
@@ -27,7 +27,6 @@ def get_config(profile: str = "default") -> RayEvolveConfig:
     if profile == "default":
         return RayEvolveConfig(
             evo=EvolutionConfig(task_sys_msg=SYSTEM_MSG),
-            database=DatabaseConfig(),
-            job=JobConfig(),
+            backend=BackendConfig(),
         )
     raise ValueError(f"Unknown profile: {profile}")

@@ -9,7 +9,7 @@ import ray
 
 from rayevolve.launch.ray_backend import RayExecutionBackend
 from rayevolve.core.dbase2 import ProgramDatabase, Program
-from .common import EvolutionConfig, JobConfig, DatabaseConfig
+from .common import EvolutionConfig, BackendConfig
 
 import textwrap
 
@@ -163,7 +163,7 @@ class EvoWorker:
                  worker_id: str,
                  gen: EvoGen,
                  evo_config: EvolutionConfig, 
-                 job_config: JobConfig,
+                 backend_config: BackendConfig,
                  project_zip_bytes: bytes,
                  results_dir: str,
                  db: ProgramDatabase, 
@@ -179,7 +179,7 @@ class EvoWorker:
 
         self.backend = RayExecutionBackend(
             project_zip_bytes=self.project_zip_bytes,
-            config=job_config,
+            config=backend_config,
             verbose=verbose,
         )
 

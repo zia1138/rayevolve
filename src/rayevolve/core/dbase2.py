@@ -100,8 +100,7 @@ class ProgramDatabase:
     Acts as a drop-in replacement for the SQLite version.
     """
 
-    def __init__(self, db_path_str: str, config: Any = None, read_only: bool = False):
-        self.config = config
+    def __init__(self, db_path_str: Optional[str] = None, read_only: bool = False):
         self.read_only = read_only
         
         # In-memory storage
@@ -114,22 +113,25 @@ class ProgramDatabase:
         
         # Setup file path
         # If it was passed an sqlite path, change it to jsonl
-        path_obj = Path(db_path_str)
+        path_obj = Path(db_path_str) if db_path_str is not None else None
         
         if not self.read_only:
             # Create a unique temporary directory for the database file
             # This prevents collisions on shared filesystems in a Ray cluster
             self._temp_dir = tempfile.TemporaryDirectory(dir=Path.cwd())
             base_path = Path(self._temp_dir.name)
-            filename = path_obj.name
-            if path_obj.suffix == '.sqlite':
+            filename = path_obj.name if path_obj else "evolution_db.jsonl"
+            if path_obj and path_obj.suffix == '.sqlite':
                 filename = path_obj.with_suffix('.jsonl').name
             self.db_path = base_path / filename
         else:
-            if path_obj.suffix == '.sqlite':
-                self.db_path = path_obj.with_suffix('.jsonl')
+            if path_obj:
+                if path_obj.suffix == '.sqlite':
+                    self.db_path = path_obj.with_suffix('.jsonl')
+                else:
+                    self.db_path = path_obj
             else:
-                self.db_path = path_obj
+                self.db_path = Path("evolution_db.jsonl")
 
         # Repopulate if file exists
         if self.db_path.exists():

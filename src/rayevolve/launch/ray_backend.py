@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 
 import ray
 
-from rayevolve.core.common import JobConfig
+from rayevolve.core.common import BackendConfig
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ class RayExecutionBackend(ExecutionBackend):
     Ray-based implementation of the execution backend. 
     It ships the project to remote nodes via in-memory zip files.
     """
-    def __init__(self, config: JobConfig, project_dir: str = None, project_zip_bytes: bytes = None, verbose: bool = True):
+    def __init__(self, config: BackendConfig, project_dir: str = None, project_zip_bytes: bytes = None, verbose: bool = True):
         self.config = config
         self.verbose = verbose
         

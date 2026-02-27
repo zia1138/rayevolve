@@ -26,31 +26,8 @@ class EvolutionConfig:
     dl_evostate_freq: float = 30
 
 
-class DatabaseConfig:
-    """Configuration for program database. ShinkEvolve code still needs to be
-       removed from this component."""
-    num_islands: int = 1
-    archive_size: int = 100
-    elite_selection_ratio: float = 0.3  # Prop of elites inspirations
-    num_archive_inspirations: int = 5  # No. inspiration programs
-    num_top_k_inspirations: int = 2  # No. top-k inspiration programs
-    migration_interval: int = 10  # Migrate every N generations
-    migration_rate: float = 0.1  # Prop. of island pop. to migrate
-    island_elitism: bool = True  # Keep best prog on their islands
-    enforce_island_separation: bool = (
-        True  # Enforce full island separation for inspirations
-    )
-    parent_selection_strategy: str = (
-        "power_law"  # "weighted"/"power_law" / "beam_search"
-    )
-    exploitation_alpha: float = 1.0  # 0=uniform, 1=power-law
-    exploitation_ratio: float = 0.2  # Chance to pick from archive
-    parent_selection_lambda: float = 10.0  # >0 sharpness of sigmoid
-    num_beams: int = 5
-    embedding_model: str = "text-embedding-3-small"
-
 @dataclass(frozen=True)
-class JobConfig:
+class BackendConfig:
     """
     Configuration for script execution.
 
@@ -66,15 +43,14 @@ class JobConfig:
 @dataclass(frozen=True)
 class RayEvolveConfig:
     evo: EvolutionConfig
-    database: DatabaseConfig
-    job: JobConfig
+    backend: BackendConfig
 
 
 def validate(cfg: RayEvolveConfig) -> None:
     """Validate the RayEvolveConfig object."""
     if cfg is None:
         raise ValueError("Config is None")
-    for name in ("evo", "database", "job"):
+    for name in ("evo", "backend"):
         if not hasattr(cfg, name) or getattr(cfg, name) is None:
             raise ValueError(f"Config missing required section: {name}")
 

@@ -1,3 +1,5 @@
+import io
+import zipfile
 import time
 import uuid
 import logging
@@ -125,13 +127,21 @@ class EvolutionRunner:
 
         cur_gen: int = ray.get(gen.get.remote()) 
         while cur_gen < self.evo_config.max_generations:
-            # state = ray.get(self.db.download_state.remote())
-            # save the state to the results directory
+            zip_bytes: bytes = ray.get(self.db.download_database_zip.remote())
+            if zip_bytes:
+                with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
+                    zf.extractall(self.results_dir)
             time.sleep(self.evo_config.dl_evostate_freq)  
             cur_gen = ray.get(gen.get.remote())
 
         # Now wait for ALL workers to finish
         ray.get(all_refs)
+
+        # Download final database state
+        zip_bytes: bytes = ray.get(self.db.download_database_zip.remote())
+        if zip_bytes:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
+                zf.extractall(self.results_dir)
 
 
     def _run_generation_0(self):

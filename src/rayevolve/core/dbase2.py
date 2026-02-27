@@ -9,6 +9,9 @@ from typing import Any, Dict, List, Optional, Union
 import math
 import bisect
 import ray
+import io
+import zipfile
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +115,21 @@ class ProgramDatabase:
         # Setup file path
         # If it was passed an sqlite path, change it to jsonl
         path_obj = Path(db_path_str)
-        if path_obj.suffix == '.sqlite':
-            self.db_path = path_obj.with_suffix('.jsonl')
+        
+        if not self.read_only:
+            # Create a unique temporary directory for the database file
+            # This prevents collisions on shared filesystems in a Ray cluster
+            self._temp_dir = tempfile.TemporaryDirectory(dir=Path.cwd())
+            base_path = Path(self._temp_dir.name)
+            filename = path_obj.name
+            if path_obj.suffix == '.sqlite':
+                filename = path_obj.with_suffix('.jsonl').name
+            self.db_path = base_path / filename
         else:
-            self.db_path = path_obj
+            if path_obj.suffix == '.sqlite':
+                self.db_path = path_obj.with_suffix('.jsonl')
+            else:
+                self.db_path = path_obj
 
         # Repopulate if file exists
         if self.db_path.exists():
@@ -254,7 +268,15 @@ class ProgramDatabase:
             timestamp = int(round(p.timestamp, 0))
             inference_time = int(round(p.metadata.get("inference_time", 0), 0))
             
-            history_lines.append(f"{timestamp}	{inference_time}	{best_score_so_far}")
+            history_lines.append(f"{timestamp}\t{inference_time}\t{best_score_so_far}")
             
         return "\n".join(history_lines)
+
+    def download_database_zip(self) -> bytes:
+        """Zips the underlying jsonl file and returns the bytes."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            if hasattr(self, 'db_path') and self.db_path.exists():
+                zf.write(self.db_path, arcname=self.db_path.name)
+        return buffer.getvalue()
 

@@ -168,7 +168,7 @@ def run(
     if ray_address and ray_ip:
         raise typer.BadParameter("Use either --ray-address or --ray-ip/--ray-port, not both.")
 
-    # Initialize Ray
+    # Connect to a ray cluster or initialze ray locally.
     if ray_address:
         if not ray_address.startswith("ray://"):
             raise typer.BadParameter(

@@ -53,7 +53,7 @@ def ray_evaluator_task(
     """
     Runs an evaluation job in an isolated temporary directory on a Ray worker node.
     """
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
         temp_path = Path(temp_dir)
         
         # 1. Extract the original project files

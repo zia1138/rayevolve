@@ -45,13 +45,12 @@ class Program:
     # Program identification
     id: str
     code: str
-    language: str = "python"
+    language: str 
 
     # Evolution information
     parent_id: Optional[str] = None
     archive_inspiration_ids: List[str] = field(default_factory=list)
     top_k_inspiration_ids: List[str] = field(default_factory=list)
-    island_idx: Optional[int] = None
     generation: int = 0
     timestamp: float = field(default_factory=time.time)
     code_diff: Optional[str] = None
@@ -66,9 +65,6 @@ class Program:
 
     # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
-
-    # Archive status
-    in_archive: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict representation, cleaning NaN values for JSON."""

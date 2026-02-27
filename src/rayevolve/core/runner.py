@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, asdict
 import ray
 from rayevolve.database.dbase2 import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
-from .common import EvolutionConfig, DatabaseConfig, JobConfig, FOLDER_PREFIX
+from .common import EvolutionConfig, DatabaseConfig, JobConfig
 from rayevolve.launch.ray_backend import RayExecutionBackend
 
 # Set up logging
@@ -123,9 +123,12 @@ class EvolutionRunner:
             )
             all_refs.append(worker.run.remote())
 
-        # TODO: Need to seralize the database here occasionally so restart is possible.
-        # TODO: Collect state from the workers. They will keep the submitted .zip files in memory.
-        #       This keeps us from moving too much around.
+        cur_gen: int = ray.get(gen.get.remote()) 
+        while cur_gen < self.evo_config.max_generations:
+            # state = ray.get(self.db.download_state.remote())
+            # save the state to the results directory
+            time.sleep(self.evo_config.dl_evostate_freq)  
+            cur_gen = ray.get(gen.get.remote())
 
         # Now wait for ALL workers to finish
         ray.get(all_refs)
@@ -159,6 +162,7 @@ class EvolutionRunner:
                 code_diff="initial",
                 correct=True,
                 combined_score=combined,
+                language=self.evo_config.lang_identifier,
                 metadata={
                     "inference_time": 0.0,  # No inference time for generation 0
                     "compute_time": rtime,

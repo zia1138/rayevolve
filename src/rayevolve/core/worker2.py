@@ -342,6 +342,7 @@ class EvoWorker:
                             code=evo_program,
                             parent_id=parent.id,
                             generation=current_gen,
+                            language=self.evo_config.lang_identifier,
                             code_diff="agent_exploit",
                             correct=True,
                             combined_score=combined,
@@ -579,6 +580,7 @@ class EvoWorker:
                             code_diff="agent_explore",
                             correct=True,
                             combined_score=combined,
+                            language=self.evo_config.lang_identifier,
                             metadata={
                                 "inference_time": time.time() - ctx.deps.inference_start,
                                 "compute_time": rtime,

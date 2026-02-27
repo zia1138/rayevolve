@@ -1,8 +1,6 @@
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Union, Dict, Any
 
-FOLDER_PREFIX = "gen"
-
 @dataclass(frozen=True)
 class EvolutionConfig:
     """
@@ -16,6 +14,7 @@ class EvolutionConfig:
         force_probing: Whether to force probing of evo block during multi-turn loop for EvoExplore/EvoExploit.
         lang_identifier: Language used for any LLM code blocks (e.g. ```python ... ```). 
         evo_file: Name of the file to use for the evo block. Default is main.py.
+        dl_evostate_freq: Frequency (in seconds) to download evo state from workers. 
     """
     results_dir: Optional[str] = None
     task_sys_msg: str =  ""
@@ -24,6 +23,7 @@ class EvolutionConfig:
     force_probing: bool = False 
     lang_identifier: str = "python" 
     evo_file: str = "main.py"
+    dl_evostate_freq: float = 300
 
 
 class DatabaseConfig:

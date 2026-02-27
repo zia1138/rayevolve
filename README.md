@@ -29,12 +29,6 @@ rayevolve run examples/circle_packing
 ```
 Use `rayevolve --help` to get all of the command line parameters. 
 
-You can visualize the progress as follows:
-`python -m rayevolve.webui.visualization --db results_XXX_YYY/evolution_db.sqlite`
-
-Output program data into a parquet file:
-`python -m rayevolve.utils.load_df results_XXX_YYY/evolution_db.sqlite -o test.parquet`
-
 We use a a config-as-code system where you use can initialzie data classes in your projects `config.py` to modify any parameters. See the 
 file [src/rayevolve/core/common.py](src/rayevolve/core/common.py)
 all the configuration parameters along with a function to validate these

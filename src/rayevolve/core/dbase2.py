@@ -97,12 +97,9 @@ class Program:
 class ProgramDatabase:
     """
     A fast, in-memory, JSONL-backed database for storing programs.
-    Acts as a drop-in replacement for the SQLite version.
     """
 
-    def __init__(self, db_path_str: Optional[str] = None, read_only: bool = False):
-        self.read_only = read_only
-        
+    def __init__(self, initial_db_zip_bytes: Optional[bytes] = None):
         # In-memory storage
         self.programs: Dict[str, Program] = {}
         # Keep a sorted list of (score, program_id) for fast Top-K sampling
@@ -111,32 +108,30 @@ class ProgramDatabase:
         self.last_iteration: int = 0
         self.best_program_id: Optional[str] = None
         
-        # Setup file path
-        # If it was passed an sqlite path, change it to jsonl
-        path_obj = Path(db_path_str) if db_path_str is not None else None
+        # Create a unique temporary directory for the database file
+        # This prevents collisions on shared filesystems in a Ray cluster
+        self._temp_dir = tempfile.TemporaryDirectory(dir=Path.cwd())
+        base_path = Path(self._temp_dir.name)
         
-        if not self.read_only:
-            # Create a unique temporary directory for the database file
-            # This prevents collisions on shared filesystems in a Ray cluster
-            self._temp_dir = tempfile.TemporaryDirectory(dir=Path.cwd())
-            base_path = Path(self._temp_dir.name)
-            filename = path_obj.name if path_obj else "evolution_db.jsonl"
-            self.db_path = base_path / filename
-        else:
-            if path_obj:
-                if path_obj.suffix == '.sqlite':
-                    self.db_path = path_obj.with_suffix('.jsonl')
-                else:
-                    self.db_path = path_obj
-            else:
-                self.db_path = Path("evolution_db.jsonl")
+        self.db_path = base_path / "evolution_db.jsonl"
+
+        if initial_db_zip_bytes:
+            try:
+                with zipfile.ZipFile(io.BytesIO(initial_db_zip_bytes), 'r') as zf:
+                    extracted_files = zf.namelist()
+                    if extracted_files:
+                        zf.extractall(base_path)
+                        extracted_path = base_path / extracted_files[0]
+                        if extracted_path.name != self.db_path.name:
+                            extracted_path.rename(self.db_path)
+            except Exception as e:
+                logger.error(f"Failed to unzip initial database: {e}")
 
         # Repopulate if file exists
         if self.db_path.exists():
             self._load_from_file()
         else:
-            if not self.read_only:
-                self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
                 
         logger.info(f"Initialized in-memory database backed by {self.db_path}. Loaded {len(self.programs)} programs.")
 
@@ -191,9 +186,6 @@ class ProgramDatabase:
 
     def add(self, program: Program, verbose: bool = False) -> str:
         """Add a program to memory and append it to the JSONL file."""
-        if self.read_only:
-            raise PermissionError("Cannot add program in read-only mode.")
-
         # Update parent's children count
         if program.parent_id and program.parent_id in self.programs:
             self.programs[program.parent_id].children_count += 1

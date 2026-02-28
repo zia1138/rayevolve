@@ -165,7 +165,6 @@ class EvoWorker:
                  evo_config: EvolutionConfig, 
                  backend_config: BackendConfig,
                  project_zip_bytes: bytes,
-                 results_dir: str,
                  db: ProgramDatabase, 
                  verbose: bool):
         super().__init__()  
@@ -173,7 +172,6 @@ class EvoWorker:
         self.gen = gen
         self.evo_config = evo_config
         self.project_zip_bytes = project_zip_bytes
-        self.results_dir = results_dir
         self.db = db
         self.verbose = verbose
 

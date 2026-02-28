@@ -69,12 +69,18 @@ class EvolutionRunner:
         # Check if we are resuming a run
         self.resuming_run = False
         self.start_gen = 0
-        db_path = Path(f"{self.results_dir}/evolution_db.sqlite")
+        db_path = Path(f"{self.results_dir}/evolution_db.jsonl")
+        
+        initial_db_zip_bytes = None
         if self.evo_config.results_dir is not None and db_path.exists():
             self.resuming_run = True
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.write(db_path, arcname=db_path.name)
+            initial_db_zip_bytes = buffer.getvalue()
 
         self.db = ProgramDatabase.remote(
-            db_path_str=str(db_path)
+            initial_db_zip_bytes=initial_db_zip_bytes
         )
 
         self.backend = RayExecutionBackend(
@@ -83,8 +89,6 @@ class EvolutionRunner:
             verbose=verbose,
         )
         
-        # TODO: Run resume doesn't work right now with new database code.
-        # Need to handle resume more elegantly.
         if self.resuming_run:
             completed_generations:int = ray.get(self.db.get_last_iteration.remote()) 
             logger.info("=" * 80)
@@ -97,7 +101,6 @@ class EvolutionRunner:
             )
             self.start_gen = completed_generations
             logger.info("=" * 80)
-            raise NotImplementedError("Resuming runs is not currently supported. This will be implemented in a future update.")
 
 
     def run_ray(self):
@@ -116,7 +119,6 @@ class EvolutionRunner:
                 self.evo_config,
                 self.backend_config,
                 self.backend.project_zip_bytes,
-                self.results_dir,
                 self.db,
                 self.verbose,
             )

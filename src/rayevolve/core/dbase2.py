@@ -121,8 +121,6 @@ class ProgramDatabase:
             self._temp_dir = tempfile.TemporaryDirectory(dir=Path.cwd())
             base_path = Path(self._temp_dir.name)
             filename = path_obj.name if path_obj else "evolution_db.jsonl"
-            if path_obj and path_obj.suffix == '.sqlite':
-                filename = path_obj.with_suffix('.jsonl').name
             self.db_path = base_path / filename
         else:
             if path_obj:

@@ -105,7 +105,6 @@ class ProgramDatabase:
         # Keep a sorted list of (score, program_id) for fast Top-K sampling
         self._leaderboard: List[tuple[float, str]] = []
         
-        self.last_iteration: int = 0
         self.best_program_id: Optional[str] = None
         
         # Create a unique temporary directory for the database file
@@ -148,10 +147,6 @@ class ProgramDatabase:
                         
                         self.programs[program.id] = program
                         
-                        # Update generation tracker
-                        if program.generation > self.last_iteration:
-                            self.last_iteration = program.generation
-                            
                         # Update leaderboard if correct and scored
                         if program.correct and program.combined_score is not None:
                             self._insert_to_leaderboard(program)
@@ -181,9 +176,6 @@ class ProgramDatabase:
         if current_best and program.combined_score > (current_best.combined_score or -float('inf')):
             self.best_program_id = program.id
 
-    def get_last_iteration(self) -> int:
-        return self.last_iteration
-
     def add(self, program: Program, verbose: bool = False) -> str:
         """Add a program to memory and append it to the JSONL file."""
         # Update parent's children count
@@ -193,10 +185,6 @@ class ProgramDatabase:
         # Store in memory
         self.programs[program.id] = program
 
-        # Update metadata trackers
-        if program.generation > self.last_iteration:
-            self.last_iteration = program.generation
-            
         if program.correct and program.combined_score is not None:
             self._insert_to_leaderboard(program)
             self._update_best_program(program)

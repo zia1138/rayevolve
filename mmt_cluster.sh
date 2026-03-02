@@ -15,7 +15,11 @@ set -euo pipefail
 #    logfire auth
 #    logfire projects use rayevolve
 # 3. Then launch an MMT cluster using the following command:
-#   `lightning run mmt --command="/teamspace/studios/this_studio/rayevolve/mmt_cluster.sh"`
+#    lightning run mmt --command="/teamspace/studios/this_studio/rayevolve/mmt_cluster.sh"
+# 4. Get the IP address from the MMT dashboard for the cluster you created and run using --ray-ip x.x.x.x
+#    where x.x.x.x is the IP address of the head node.
+#    rayevolve run examples/circle_packing --ray-ip x.x.x.x
+
 
 : "${MASTER_ADDR:?need MASTER_ADDR}"
 

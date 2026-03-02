@@ -183,6 +183,8 @@ class EvoWorker:
 
         # TODO: Need to handle logfire config more cleanly.
         logfire.configure(scrubbing=False)
+        logger.addHandler(logfire.LogfireLoggingHandler())
+        logger.setLevel(logging.INFO)
         logfire.instrument_pydantic_ai()
 
     def run(self):

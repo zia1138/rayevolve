@@ -12,6 +12,7 @@ import ray
 import io
 import zipfile
 import tempfile
+import logfire
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,11 @@ class ProgramDatabase:
         self._leaderboard: List[tuple[float, str]] = []
         
         self.best_program_id: Optional[str] = None
-        
+
+        logfire.configure()
+        logger.addHandler(logfire.LogfireLoggingHandler())
+        logger.setLevel(logging.INFO)
+
         # Create a unique temporary directory for the database file
         # This prevents collisions on shared filesystems in a Ray cluster
         self._temp_dir = tempfile.TemporaryDirectory(dir=Path.cwd())

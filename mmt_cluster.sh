@@ -7,7 +7,7 @@ set -euo pipefail
 # This should work in other similar cluster setups with a head node and worker nodes
 # that is compatible with `torchrun`. 
 #
-# 1. Install lightnigng AI studios SDK within the uv environment:
+# 1. Install lightning AI studios SDK within the uv environment:
 #    cd rayevolve && uv sync
 #    source .venv/bin/activate
 #    uv pip install lightning-sdk

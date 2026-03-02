@@ -4,7 +4,6 @@ import time
 import uuid
 import logging
 import json
-from rich.logging import RichHandler
 from typing import List, Optional, Union, cast
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +13,7 @@ from rayevolve.core.dbase2 import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, BackendConfig
 from rayevolve.launch.ray_backend import RayExecutionBackend
+import logfire
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -40,32 +40,14 @@ class EvolutionRunner:
             self.results_dir = Path(evo_config.results_dir).resolve()
 
         if self.verbose:
-            # Create log file path in results directory
-            log_filename = f"{self.results_dir}/evolution_run.log"
-            Path(self.results_dir).mkdir(parents=True, exist_ok=True)
-
-            # Set up logging with both console and file handlers
-            logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-                handlers=[
-                    RichHandler(
-                        show_time=False, show_level=False, show_path=False
-                    ),  # Console output (clean)
-                    logging.FileHandler(
-                        log_filename, mode="a", encoding="utf-8"
-                    ),  # File output (detailed)
-                ],
-            )
+            logfire.configure()
+            logger.addHandler(logfire.LogfireLoggingHandler())
+            logger.setLevel(logging.INFO)
 
             # Also log the initial setup information
-            logger.info("=" * 80)
             start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             logger.info(f"Evolution run started at {start_time}")
             logger.info(f"Results directory: {self.results_dir}")
-            logger.info(f"Log file: {log_filename}")
-            logger.info("=" * 80)
 
         # Check if we are resuming a run
         self.resuming_run = False
@@ -100,16 +82,13 @@ class EvolutionRunner:
             else:
                 logger.warning(f"Could not find {state_file}. Resuming from generation 0.")
                 
-            logger.info("=" * 80)
             logger.info("RESUMING PREVIOUS EVOLUTION RUN")
-            logger.info("=" * 80)
             logger.info(
                 f"Resuming evolution from: {self.results_dir}\n"
                 f"Found {completed_generations} "
                 "previously completed generations."
             )
             self.start_gen = completed_generations
-            logger.info("=" * 80)
 
 
     def run_ray(self):

@@ -3,6 +3,7 @@ import zipfile
 import time
 import uuid
 import logging
+import json
 from rich.logging import RichHandler
 from typing import List, Optional, Union, cast
 from datetime import datetime
@@ -90,7 +91,15 @@ class EvolutionRunner:
         )
         
         if self.resuming_run:
-            completed_generations:int = ray.get(self.db.get_last_iteration.remote()) 
+            state_file = Path(f"{self.results_dir}/evogen_state.json")
+            completed_generations = 0
+            if state_file.exists():
+                with open(state_file, "r") as f:
+                    state_data = json.load(f)
+                    completed_generations = state_data.get("generation", 0)
+            else:
+                logger.warning(f"Could not find {state_file}. Resuming from generation 0.")
+                
             logger.info("=" * 80)
             logger.info("RESUMING PREVIOUS EVOLUTION RUN")
             logger.info("=" * 80)
@@ -130,6 +139,11 @@ class EvolutionRunner:
             if zip_bytes:
                 with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
                     zf.extractall(self.results_dir)
+            
+            state_file = Path(f"{self.results_dir}/evogen_state.json")
+            with open(state_file, "w") as f:
+                json.dump({"generation": cur_gen}, f)
+                
             time.sleep(self.evo_config.dl_evostate_freq)  
             cur_gen = ray.get(gen.get.remote())
 
@@ -141,6 +155,12 @@ class EvolutionRunner:
         if zip_bytes:
             with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
                 zf.extractall(self.results_dir)
+
+        # Save final generation state
+        final_gen: int = ray.get(gen.get.remote())
+        state_file = Path(f"{self.results_dir}/evogen_state.json")
+        with open(state_file, "w") as f:
+            json.dump({"generation": final_gen}, f)
 
 
     def _run_generation_0(self):

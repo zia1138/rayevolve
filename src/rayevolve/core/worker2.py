@@ -15,7 +15,6 @@ import textwrap
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, ModelMessage, RunContext, RunUsage, UsageLimits
-from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 
 import logfire
 import importlib.metadata
@@ -261,12 +260,13 @@ class EvoWorker:
         total_programs = ray.get(self.db.total_programs.remote())
         prompt = template.format(best_score_table=best_score_table, num_workers=num_workers, total_programs=total_programs)
 
-        # TODO: Need to allow model to be configurable.     
-        evo_strategist = Agent(model='google-gla:gemini-3-pro-preview', 
+
+        model_spec = self.evo_config.build_strategy_model()
+        evo_strategist = Agent(model=model_spec.model, 
                                output_type=StrategyProbs, 
                                system_prompt=self.evo_config.task_sys_msg,
                                toolsets = None)
-        result = evo_strategist.run_sync(prompt)
+        result = evo_strategist.run_sync(prompt, model_settings=model_spec.settings)
         probs: StrategyProbs = result.output
 
         weights = probs.as_normalized_weights()
@@ -316,8 +316,6 @@ class EvoWorker:
                                                  score=parent.combined_score,
                                                  lang_identifier=self.evo_config.lang_identifier) 
 
-        model = GoogleModel('gemini-3-flash-preview')
-        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})
 
         def submit(ctx: RunContext[ExploitContext], program: str) -> None:
             """
@@ -359,6 +357,9 @@ class EvoWorker:
             else:
                 raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue. Here is the error:", results.get("error", "Unknown Error"))
 
+        evo_models = self.evo_config.build_evo_models()
+        model = evo_models[0].model
+        settings = evo_models[0].settings
         evo_exploit = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
@@ -548,8 +549,9 @@ class EvoWorker:
                                                 floor_score=floor_score,
                                                 lang_identifier=self.evo_config.lang_identifier)
 
-        model = GoogleModel('gemini-3-flash-preview')
-        settings = GoogleModelSettings(google_thinking_config={"thinking_budget":8192})
+        evo_models = self.evo_config.build_evo_models()
+        model = evo_models[0].model
+        settings = evo_models[0].settings
         package_expert = Agent(model, model_settings=settings, system_prompt=self.evo_config.task_sys_msg)
 
         async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:

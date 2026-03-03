@@ -149,7 +149,6 @@ def run(
     validate(cfg)
 
     typer.echo(f"run_name={run_name} seed={seed} profile={profile}")
-    typer.echo(asdict(cfg))
 
     if dry_run:
         return

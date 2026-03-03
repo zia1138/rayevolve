@@ -14,12 +14,15 @@ uv sync
 source .venv/bin/activate
 ```
 
-Create an account and project called `rayevolve` on [logfire](https://github.com/pydantic/logfire). 
+Create an account and project called `rayevolve` on [logfire](https://logfire.pydantic.dev/login). 
 You will need to authenticate to logfire and select the `rayevolve` project to log your runs. You can do this as follows:
 ```bash
 logfire auth
 logfire projects use rayevolve
 ```
+
+This will create a file `.logfire/logfire_credentials.json` with your logfire credentials and configuration. If you
+use a ray cluster, you need to make sure that this folder, in addition to rayevolve, is copied to all nodes of the cluster.
 
 # Quickstart Instructions
 

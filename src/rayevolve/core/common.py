@@ -1,6 +1,15 @@
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Union, Dict, Any
+from typing import Callable, List, Optional, Dict, Any
+from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 
+
+@dataclass(frozen=True)
+class ModelSpec:
+    description: str
+    model: Model
+    settings: ModelSettings
+    
 @dataclass(frozen=True)
 class EvolutionConfig:
     """
@@ -16,6 +25,8 @@ class EvolutionConfig:
         evo_file: Name of the file to use for the evo block. Default is main.py.
         dl_evostate_freq: Frequency (in seconds) to download evo state from workers. 
     """
+    build_strategy_model: Callable[[], ModelSpec]
+    build_evo_models: Callable[[], list[ModelSpec]]
     results_dir: Optional[str] = None
     task_sys_msg: str =  ""
     num_agent_workers: int = 4
@@ -24,7 +35,6 @@ class EvolutionConfig:
     lang_identifier: str = "python" 
     evo_file: str = "main.py"
     dl_evostate_freq: float = 30
-
 
 @dataclass(frozen=True)
 class BackendConfig:

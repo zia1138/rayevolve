@@ -1,6 +1,6 @@
 # rayevolve <a href="https://github.com/zia1138/rayevolve"><img src="rayevolve.png" align="right" height="150" alt="rayevolve github" /></a>
 
-Experimental project for LLM guided algorithm design and evolution built on [ray](https://www.ray.io/),
+Experimental project for LLM guided algorithm design and optimization built on [ray](https://www.ray.io/),
 [pydantic-ai](https://github.com/pydantic/pydantic-ai), and [logfire](https://github.com/pydantic/logfire).
 Originally started as an in-place fork from [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve).
 
@@ -88,45 +88,3 @@ rayevolve run examples/circle_packing --ray-ip x.x.x.x
 ```
 where x.x.x.x is the IP address of the ray cluster head node, which you can find from the log output
 on Lightning AI Studios.
-
-# debugging in ray
-
-If the ray VSCode debugger doesn't work.
-Add the following in `~/.vscode/launch.json`. You can also use in the launch.json file
-the "Add Configuration..." button in the lower right. Then chose "Python Debugger" and
-"Remote Attach" Use local host and the matching port number for the code below. I think you 
-might need different ports for different actors.
-```json
-{
-  "configurations": [
-    {
-      "name": "Python Debugger: Remote Attach",
-      "type": "debugpy",
-      "request": "attach",
-      "connect": {
-        "host": "localhost",
-        "port": 5678
-      },
-      "pathMappings": [
-        {
-          "localRoot": "${workspaceFolder}",
-          "remoteRoot": "."
-        }
-      ]
-    }
-  ]
-}
-```
-
-In the ray worker/actor add
-```python
-import debugpy
-debugpy.listen(5678)
-debugpy.wait_for_client()
-debugpy.breakpoint()
-```
-Then hit the green arrow in the debug panel to attach and debug.
-
-This is inspired from https://github.com/ray-project/ray/issues/41953
-and https://code.visualstudio.com/docs/python/debugging#_debugging-by-attaching-over-a-network-connection
-

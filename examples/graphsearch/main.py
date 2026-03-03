@@ -29,8 +29,6 @@ class SearchEnv:
         pass
 
 
-# EVOLVE-BLOCK-START
-
 def reconstruct_path(came_from: Dict, start, goal) -> List:
     cur = goal
     path = [cur]
@@ -76,4 +74,4 @@ def graph_search(env: SearchEnv) -> Optional[List]:
 
     return None
 
-# EVOLVE-BLOCK-END
+

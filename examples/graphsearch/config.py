@@ -25,6 +25,8 @@ SYSTEM_MSG = textwrap.dedent("""\
     IMPORTANT IMPLEMENTATION DETAILS:
     - Do NOT modify the `SearchEnv` class definition provided in the template. The evaluator will pass a compatible subclass instance at runtime.
     - Your code must define `graph_search(env) -> Optional[List]`.
+                             
+    The main entry point of this code is: `def graph_search(env: SearchEnv) -> Optional[List]`
 """)
 
 def list_profiles() -> list[str]:

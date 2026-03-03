@@ -20,6 +20,8 @@ SYSTEM_MSG = textwrap.dedent("""\
     7. The math literature suggests special arrangements for specific values of n
 
     Be creative and try to find a new solution.
+
+    NOTE: run_packing() is the main entry point of the code.
 """)
 
 SYSTEM_MSG_SCIPY = textwrap.dedent("""\
@@ -36,13 +38,15 @@ SYSTEM_MSG_SCIPY = textwrap.dedent("""\
     8. You can use the scipy optimize package (e.g. LP or SLSQP) to optimize the radii given center locations and constraints
 
     Be creative and try to find a new solution better than the best known result.
+
+    NOTE: run_packing() is the main entry point of the code.
 """)
 
 
 def build_strategy_model() -> ModelSpec:
     return ModelSpec(
-        description="GEMINI Pro 3 Preview",
-        model=GoogleModel("gemini-3-pro-preview"),
+        description="GEMINI 3 Flash Preview",
+        model=GoogleModel("gemini-3-flash-preview"),
         settings=GoogleModelSettings(),
     )
 

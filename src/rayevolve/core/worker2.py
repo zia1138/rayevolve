@@ -44,45 +44,14 @@ class StrategyProbs(BaseModel):
         return {k: v / total for k, v in weights.items()}
 
 
-class EvolveBlock(BaseModel):
-    """
-    Represents the dissected components of a source code file containing EVOLVE-BLOCK markers.
-    """
-    pre_block: str = Field(description="Content before the EVOLVE-BLOCK-START line.")
-    start_marker_line: str = Field(description="The complete line containing the EVOLVE-BLOCK-START marker.")
-    inner_content: str = Field(description="The original code content between the markers.")
-    end_marker_line: str = Field(description="The complete line containing the EVOLVE-BLOCK-END marker.")
-    post_block: str = Field(description="Content after the EVOLVE-BLOCK-END line.")
- 
-    def reconstruct(self, new_inner_content: str) -> str:
-        """
-        Reconstructs the full source code using these surrounding parts and
-        the provided new inner content. Handles newline normalization.
-        """
-        # 1. Clean the new content (remove leading/trailing whitespace/newlines)
-        cleaned_inner = new_inner_content.strip()
-        
-        # 2. Ensure the start marker line ends with a newline (safety check)
-        start_line = self.start_marker_line
-        if not start_line.endswith('\n') and not start_line.endswith('\r'):
-            start_line += '\n'
- 
-        # 3. Format the inner block with a trailing newline if it has content
-        formatted_inner = ""
-        if cleaned_inner:
-            formatted_inner = cleaned_inner + '\n'
- 
-        # 4. Concatenate
-        return f"{self.pre_block}{start_line}{formatted_inner}{self.end_marker_line}{self.post_block}"
-
 class ExploitContext(BaseModel):
-    evolve_block: EvolveBlock
+    parent_code: str
     parent_score: float
     inference_start: float
     probe_needed: bool = False
 
 class ExploreContext(BaseModel):
-    evolve_block: EvolveBlock
+    parent_code: str
     floor_score: float
     inference_start: float
     run_experiment_count: int = 0
@@ -90,47 +59,6 @@ class ExploreContext(BaseModel):
     inspiration_count: int = 0
     probe_needed: bool = False
 
-
-def extract_evolve_block(full_code: str) -> EvolveBlock:
-    """
-    Parses a source code string and returns a EvolveBlock object containing
-    the separated components.
-    
-    Raises:
-        ValueError: If markers are missing, duplicated, or out of order.
-    """
-    lines = full_code.splitlines(keepends=True)
-    
-    start_index = -1
-    end_index = -1
-     
-    # Linear scan to find marker lines
-    for i, line in enumerate(lines):
-        if "EVOLVE-BLOCK-START" in line:
-            if start_index != -1:
-                raise ValueError("Multiple EVOLVE-BLOCK-START markers found.")
-            start_index = i
-        elif "EVOLVE-BLOCK-END" in line:
-            if end_index != -1:
-                raise ValueError("Multiple EVOLVE-BLOCK-END markers found.")
-            end_index = i
-             
-    # Validation Logic
-    if start_index == -1:
-        raise ValueError("EVOLVE-BLOCK-START marker not found in code.")
-    if end_index == -1:
-        raise ValueError("EVOLVE-BLOCK-END marker not found in code.")
-    if start_index >= end_index:
-        raise ValueError(f"EVOLVE-BLOCK-START (line {start_index+1}) appears after or on same line as EVOLVE-BLOCK-END (line {end_index+1}).")
- 
-    # Construct the Pydantic Model
-    return EvolveBlock(
-        pre_block="".join(lines[:start_index]),
-        start_marker_line=lines[start_index],
-        inner_content="".join(lines[start_index+1 : end_index]),
-        end_marker_line=lines[end_index],
-        post_block="".join(lines[end_index+1:])
-    )
 
 @ray.remote(num_cpus=0)
 class EvoGen:
@@ -148,6 +76,7 @@ class EvoGen:
         """Increment and return the new generation."""
         self.generation += 1
         return self.generation
+
 
 @ray.remote(num_cpus=0)
 class EvoWorker:
@@ -284,7 +213,6 @@ class EvoWorker:
 
     def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
-        evolve_block = extract_evolve_block(parent.code)
         inference_start = time.time()
 
         exploit_template = textwrap.dedent("""
@@ -312,9 +240,9 @@ class EvoWorker:
             - If you cannot beat the score of the above code after 5 distinct approaches, give up and offer an explanation why.
          """)
 
-        exploit_prompt = exploit_template.format(code=evolve_block.inner_content, 
+        exploit_prompt = exploit_template.format(code=parent.code,
                                                  score=parent.combined_score,
-                                                 lang_identifier=self.evo_config.lang_identifier) 
+                                                 lang_identifier=self.evo_config.lang_identifier)
 
 
         def submit(ctx: RunContext[ExploitContext], program: str) -> None:
@@ -324,20 +252,19 @@ class EvoWorker:
             Args:
                 program: Code for the program that achieved a higher score.
             """            
-            evo_program = ctx.deps.evolve_block.reconstruct(program)
             results, rtime = self.backend.run_job(
-                generated_code=evo_program,
+                generated_code=program,
                 exec_fname_rel=self.evo_config.evo_file
             )
-            
-            if results['correct']['correct']: 
+
+            if results['correct']['correct']:
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.parent_score:
                         # Add the program to the database
                         db_program = Program(
                             id=str(uuid.uuid4()),
-                            code=evo_program,
+                            code=program,
                             parent_id=parent.id,
                             generation=current_gen,
                             language=self.evo_config.lang_identifier,
@@ -380,12 +307,11 @@ class EvoWorker:
                 str: A human-readable report of the results of the experiment.
             """
             if self.evo_config.force_probing and ctx.deps.probe_needed:
-                return "You must use `probe` to gather information that will help you improve the program before another run_experiment." 
+                return "You must use `probe` to gather information that will help you improve the program before another run_experiment."
             ctx.deps.probe_needed = True
 
-            evo_program = ctx.deps.evolve_block.reconstruct(program)
             results, rtime = self.backend.run_job(
-                generated_code=evo_program,
+                generated_code=program,
                 exec_fname_rel=self.evo_config.evo_file
             )
 
@@ -453,14 +379,8 @@ class EvoWorker:
                 stdout/stderr from running the probe.
             """
             ctx.deps.probe_needed = False
-            # Probe inherits the parent's EVOLVE-BLOCK so it has access to all
-            # definitions (PREPROC, BASE_LEARNERS, engineer_features, etc.).
-            # Without this, probes run against a bare skeleton and crash on
-            # missing names like np.column_stack on an empty list.
-            full_probe = ctx.deps.evolve_block.inner_content + "\n" + probe_code
-            evo_program = ctx.deps.evolve_block.reconstruct(full_probe)
             results, rtime = self.backend.run_job(
-                generated_code=evo_program,
+                generated_code=probe_code,
                 exec_fname_rel=self.evo_config.evo_file
             )
 
@@ -489,7 +409,7 @@ class EvoWorker:
             return out_str
 
         try:
-            exploit_ctx = ExploitContext(evolve_block=evolve_block,
+            exploit_ctx = ExploitContext(parent_code=parent.code,
                                          parent_score=parent.combined_score,
                                          inference_start=inference_start)
             evo_exploit.run_sync(exploit_prompt, deps=exploit_ctx)
@@ -502,7 +422,6 @@ class EvoWorker:
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         inference_start = time.time()
 
-        evolve_block = extract_evolve_block(parent.code)
         floor_score = parent.combined_score * explore_performance_floor
         explore_template = textwrap.dedent("""
             The code below has achieved a score of **{score}**. 
@@ -544,7 +463,7 @@ class EvoWorker:
             - If you cannot find a correct, novel program that achieves the minimum score, after 5 attempts explain why and give up.
         """)
 
-        explore_prompt = explore_template.format(code=evolve_block.inner_content,
+        explore_prompt = explore_template.format(code=parent.code,
                                                 score=parent.combined_score,
                                                 floor_score=floor_score,
                                                 lang_identifier=self.evo_config.lang_identifier)
@@ -564,19 +483,18 @@ class EvoWorker:
                 change: A detailed description of the modifications made (e.g. , conceptual, algorithmic change,
                     refactoring, control-flow alteration, etc.). 
             """
-            evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             results, rtime = self.backend.run_job(
-                generated_code=evo_program,
+                generated_code=novel_program,
                 exec_fname_rel=self.evo_config.evo_file
             )
 
-            if results['correct']['correct']: 
+            if results['correct']['correct']:
                 combined = results.get("metrics", {}).get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.floor_score:
                         db_program = Program(
                             id=str(uuid.uuid4()),
-                            code=evo_program,
+                            code=novel_program,
                             parent_id=parent.id,
                             generation=current_gen,
                             code_diff="agent_explore",
@@ -630,9 +548,8 @@ class EvoWorker:
             ctx.deps.run_experiment_count += 1
             ctx.deps.probe_needed = True
 
-            evo_program = ctx.deps.evolve_block.reconstruct(novel_program)
             results, rtime = self.backend.run_job(
-                generated_code=evo_program,
+                generated_code=novel_program,
                 exec_fname_rel=self.evo_config.evo_file
             )
 
@@ -676,14 +593,13 @@ class EvoWorker:
                Use this program for inspiration, but do NOT copy it verbatim. Adapt the concepts to your specific context.
             """
             ctx.deps.inspiration_count += 1
-            insp = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=parent_selection_top_k))
+            insp: Program = ray.get(self.db.sample_all_topK.remote(exclude_pid=[parent.id], topK=parent_selection_top_k))
             insp_str = ""
             if not insp:
                 insp_str = "No programs are available in the database for inspiration at this time."
             else:
                 insp_str += f"Use this program for inspiration. It had the following score: ***{insp.combined_score}***\n"
-                insp_block = extract_evolve_block(insp.code)
-                insp_str += f"```python\n{insp_block.inner_content}\n```\n"
+                insp_str += f"```python\n{insp.code}\n```\n"
             return insp_str
 
         @evo_explore.tool
@@ -753,11 +669,8 @@ class EvoWorker:
                 stdout/stderr from running the probe.
             """
             ctx.deps.probe_needed = False
-            # Probe inherits the parent's EVOLVE-BLOCK (same fix as exploit probe).
-            full_probe = ctx.deps.evolve_block.inner_content + "\n" + probe_code
-            evo_program = ctx.deps.evolve_block.reconstruct(full_probe)
             results, rtime = self.backend.run_job(
-                generated_code=evo_program,
+                generated_code=probe_code,
                 exec_fname_rel=self.evo_config.evo_file
             )
 
@@ -785,7 +698,7 @@ class EvoWorker:
             return out_str
 
         try:
-            explore_ctx = ExploreContext(evolve_block=evolve_block, floor_score=floor_score, inference_start=inference_start)
+            explore_ctx = ExploreContext(parent_code=parent.code, floor_score=floor_score, inference_start=inference_start)
             evo_explore.run_sync(explore_prompt, deps=explore_ctx)
         except Exception as e:
             print(f"evo_explore encountered an error: {e}")

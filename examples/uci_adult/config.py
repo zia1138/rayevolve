@@ -16,6 +16,8 @@ SYSTEM_MSG = textwrap.dedent("""\
     - You must return a DataFrame with a "y_proba" column aligned with the X_val index.
 
     Be creative with feature engineering (encodings, transformations, combinations) and model selection.
+    The main entry point in the code is the following function:
+    preprocess_train_and_predict(X_train: pd.DataFrame, y_train: pd.DataFrame, X_val: pd.DataFrame) -> pd.DataFrame
 """)
 
 def list_profiles() -> list[str]:

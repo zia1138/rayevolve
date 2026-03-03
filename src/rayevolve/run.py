@@ -42,18 +42,48 @@ def resolve_config_file(project: str) -> Path:
 
 
 DEFAULT_CONFIG_TEMPLATE = """\
-# Import config classes from rayevolve.core
-from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, BackendConfig
+from rayevolve.core.common import RayEvolveConfig, EvolutionConfig, BackendConfig, ModelSpec
+from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+import textwrap
 
 def list_profiles() -> list[str]:
     \"\"\"List available configuration profiles to display on CLI.\"\"\"
     return ["default"]
 
+SYSTEM_MSG = textwrap.dedent(\"\"\"\\
+    You are an expert in <DOMAIN>. Describe the task and any key insights here.
+
+    NOTE: <entry_function>() is the main entry point of the code.
+\"\"\")
+
+
+def build_strategy_model() -> ModelSpec:
+    return ModelSpec(
+        description="GEMINI 3 Flash Preview",
+        model=GoogleModel("gemini-3-flash-preview"),
+        settings=GoogleModelSettings(),
+    )
+
+
+def build_evo_models() -> list[ModelSpec]:
+    return [
+        ModelSpec(
+            description="GEMINI 3 Flash Preview",
+            model=GoogleModel("gemini-3-flash-preview"),
+            settings=GoogleModelSettings(google_thinking_config={"thinking_budget": 8192})
+        )
+    ]
+
+
 def get_config(profile: str = "default") -> RayEvolveConfig:
     \"\"\"Get configuration for the given profile.\"\"\"
     if profile == "default":
         return RayEvolveConfig(
-            evo=EvolutionConfig(),
+            evo=EvolutionConfig(
+                task_sys_msg=SYSTEM_MSG,
+                build_strategy_model=build_strategy_model,
+                build_evo_models=build_evo_models,
+            ),
             backend=BackendConfig(),
         )
     raise ValueError(f"Unknown profile: {profile}")

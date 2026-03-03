@@ -285,8 +285,9 @@ class EvoWorker:
                 raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue. Here is the error:", results.get("error", "Unknown Error"))
 
         evo_models = self.evo_config.build_evo_models()
-        model = evo_models[0].model
-        settings = evo_models[0].settings
+        selected = random.choice(evo_models)
+        model = selected.model
+        settings = selected.settings
         evo_exploit = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
@@ -469,8 +470,9 @@ class EvoWorker:
                                                 lang_identifier=self.evo_config.lang_identifier)
 
         evo_models = self.evo_config.build_evo_models()
-        model = evo_models[0].model
-        settings = evo_models[0].settings
+        selected = random.choice(evo_models)
+        model = selected.model
+        settings = selected.settings
         package_expert = Agent(model, model_settings=settings, system_prompt=self.evo_config.task_sys_msg)
 
         async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:

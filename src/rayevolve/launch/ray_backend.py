@@ -143,9 +143,9 @@ class ExecutionBackend(ABC):
         self, 
         generated_code: str, 
         exec_fname_rel: str
-    ) -> Tuple[Dict[str, Any], float]:
+    ) -> Tuple[Dict[str, Any], float, bytes]:
         """
-        Executes the generated code and returns a tuple of (results_dict, runtime_seconds).
+        Executes the generated code and returns a tuple of (results_dict, runtime_seconds, zip bytes from execution results).
         """
         pass
 
@@ -190,7 +190,7 @@ class RayExecutionBackend(ExecutionBackend):
         self, 
         generated_code: str, 
         exec_fname_rel: str
-    ) -> Tuple[Dict[str, Any], float]:
+    ) -> Tuple[Dict[str, Any], float, bytes]:
         
         # We tell evaluate.py to output results to ".", which is the root of the temp dir
         cmd = self._build_command()
@@ -226,4 +226,4 @@ class RayExecutionBackend(ExecutionBackend):
         elif returncode != 0 and not results.get("error"):
             results["error"] = f"Process failed with return code {returncode}. See stderr_log."
         
-        return results, rtime
+        return results, rtime, result_zip_bytes

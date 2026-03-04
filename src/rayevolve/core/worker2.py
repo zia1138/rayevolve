@@ -109,6 +109,8 @@ class EvoWorker:
             verbose=verbose,
         )
 
+        self.submitted_zip_bytes = {}
+
         # TODO: Need to handle logfire config more cleanly.
         logfire.configure(scrubbing=False)
         logger.addHandler(logfire.LogfireLoggingHandler())
@@ -252,7 +254,7 @@ class EvoWorker:
             Args:
                 program: Code for the program that achieved a higher score.
             """            
-            results, rtime = self.backend.run_job(
+            results, rtime, result_zip_bytes = self.backend.run_job(
                 generated_code=program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -277,6 +279,7 @@ class EvoWorker:
                             }
                         )
                         ray.get(self.db.add.remote(db_program))
+                        self.submitted_zip_bytes[db_program.id] = result_zip_bytes
                     else:
                         raise ModelRetry("Improved program did not achieve a higher score on submission. Analyze why it failed and fix the issue.")
                 else:
@@ -311,7 +314,7 @@ class EvoWorker:
                 return "You must use `probe` to gather information that will help you improve the program before another run_experiment."
             ctx.deps.probe_needed = True
 
-            results, rtime = self.backend.run_job(
+            results, rtime, _ = self.backend.run_job(
                 generated_code=program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -380,7 +383,7 @@ class EvoWorker:
                 stdout/stderr from running the probe.
             """
             ctx.deps.probe_needed = False
-            results, rtime = self.backend.run_job(
+            results, rtime, _ = self.backend.run_job(
                 generated_code=probe_code,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -485,7 +488,7 @@ class EvoWorker:
                 change: A detailed description of the modifications made (e.g. , conceptual, algorithmic change,
                     refactoring, control-flow alteration, etc.). 
             """
-            results, rtime = self.backend.run_job(
+            results, rtime, result_zip_bytes = self.backend.run_job(
                 generated_code=novel_program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -509,6 +512,7 @@ class EvoWorker:
                             }
                         )
                         ray.get(self.db.add.remote(db_program))
+                        self.submitted_zip_bytes[db_program.id] = result_zip_bytes
                     else:
                         raise ModelRetry("Novel program did not achieve the minimum score on submission.  Analyze why it failed and fix the issue.")
                 else:
@@ -550,7 +554,7 @@ class EvoWorker:
             ctx.deps.run_experiment_count += 1
             ctx.deps.probe_needed = True
 
-            results, rtime = self.backend.run_job(
+            results, rtime, _ = self.backend.run_job(
                 generated_code=novel_program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -671,7 +675,7 @@ class EvoWorker:
                 stdout/stderr from running the probe.
             """
             ctx.deps.probe_needed = False
-            results, rtime = self.backend.run_job(
+            results, rtime, _ = self.backend.run_job(
                 generated_code=probe_code,
                 exec_fname_rel=self.evo_config.evo_file
             )

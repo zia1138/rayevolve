@@ -155,7 +155,7 @@ class EvolutionRunner:
             raise ValueError(f"Could not read initial program from {self.project_dir}/{self.evo_config.evo_file}. Error: {e}")
 
         # Run the evaluation code using the Ray backend.
-        results, rtime = self.backend.run_job(
+        results, rtime, result_zip_bytes = self.backend.run_job(
             generated_code=initial_code,
             exec_fname_rel=self.evo_config.evo_file
         )
@@ -180,6 +180,10 @@ class EvolutionRunner:
             )
 
             ray.get(self.db.add.remote(db_program, verbose=True))
+
+            self.results_dir.mkdir(parents=True, exist_ok=True)
+            zip_path = self.results_dir / f"{db_program.id}.zip"
+            zip_path.write_bytes(result_zip_bytes)
         else:
             raise ValueError("Initial program is not correct. Please fix the initial program and try again.")
     

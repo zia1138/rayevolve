@@ -137,6 +137,8 @@ class ProgramDatabase:
         else:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
                 
+        self.pid_zip_bytes = {}  # dict mapping a program ID to the zip bytes of its code 
+
         logger.info(f"Initialized in-memory database backed by {self.db_path}. Loaded {len(self.programs)} programs.")
 
     def _load_from_file(self):
@@ -256,6 +258,18 @@ class ProgramDatabase:
             history_lines.append(f"{timestamp}\t{inference_time}\t{best_score_so_far}")
             
         return "\n".join(history_lines)
+
+    def get_zip_program_ids(self) -> List[str]:
+        """Return the current list of all program IDs that have associated zip bytes."""
+        return list(self.pid_zip_bytes.keys())
+
+    def add_zip_bytes(self, program_id: str, zip_bytes: bytes):
+        """Store the zip bytes for a given program ID."""
+        self.pid_zip_bytes[program_id] = zip_bytes
+
+    def get_zip_bytes(self, program_id: str) -> bytes: 
+        """Retrive zip bytes for a given program ID."""
+        return self.pid_zip_bytes[program_id]
 
     def download_database_zip(self) -> bytes:
         """Zips the underlying jsonl file and returns the bytes."""

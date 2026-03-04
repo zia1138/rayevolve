@@ -119,11 +119,13 @@ class EvolutionRunner:
                 with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
                     zf.extractall(self.results_dir)
             
+            self._sync_zip_files()
+
             state_file = Path(f"{self.results_dir}/evogen_state.json")
             with open(state_file, "w") as f:
                 json.dump({"generation": cur_gen}, f)
-                
-            time.sleep(self.evo_config.dl_evostate_freq)  
+
+            time.sleep(self.evo_config.dl_evostate_freq)
             cur_gen = ray.get(gen.get.remote())
 
         # Now wait for ALL workers to finish
@@ -135,12 +137,24 @@ class EvolutionRunner:
             with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
                 zf.extractall(self.results_dir)
 
+        self._sync_zip_files()
+
         # Save final generation state
         final_gen: int = ray.get(gen.get.remote())
         state_file = Path(f"{self.results_dir}/evogen_state.json")
         with open(state_file, "w") as f:
             json.dump({"generation": final_gen}, f)
 
+
+    def _sync_zip_files(self):
+        """Download any zip files from the DB that haven't been saved locally yet."""
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        zip_program_ids: List[str] = ray.get(self.db.get_zip_program_ids.remote())
+        for pid in zip_program_ids:
+            zip_path = self.results_dir / f"{pid}.zip"
+            if not zip_path.exists():
+                zip_bytes: bytes = ray.get(self.db.get_zip_bytes.remote(pid))
+                zip_path.write_bytes(zip_bytes)
 
     def _run_generation_0(self):
         """Setup and run generation 0 to initialize the database."""
@@ -180,6 +194,7 @@ class EvolutionRunner:
             )
 
             ray.get(self.db.add.remote(db_program, verbose=True))
+            ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
 
             self.results_dir.mkdir(parents=True, exist_ok=True)
             zip_path = self.results_dir / f"{db_program.id}.zip"

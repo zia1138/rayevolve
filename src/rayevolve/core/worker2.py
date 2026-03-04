@@ -109,8 +109,6 @@ class EvoWorker:
             verbose=verbose,
         )
 
-        self.submitted_zip_bytes = {}
-
         # TODO: Need to handle logfire config more cleanly.
         logfire.configure(scrubbing=False)
         logger.addHandler(logfire.LogfireLoggingHandler())
@@ -279,7 +277,7 @@ class EvoWorker:
                             }
                         )
                         ray.get(self.db.add.remote(db_program))
-                        self.submitted_zip_bytes[db_program.id] = result_zip_bytes
+                        ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
                     else:
                         raise ModelRetry("Improved program did not achieve a higher score on submission. Analyze why it failed and fix the issue.")
                 else:
@@ -512,7 +510,7 @@ class EvoWorker:
                             }
                         )
                         ray.get(self.db.add.remote(db_program))
-                        self.submitted_zip_bytes[db_program.id] = result_zip_bytes
+                        ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
                     else:
                         raise ModelRetry("Novel program did not achieve the minimum score on submission.  Analyze why it failed and fix the issue.")
                 else:

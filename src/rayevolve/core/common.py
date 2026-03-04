@@ -34,7 +34,7 @@ class EvolutionConfig:
     force_probing: bool = False 
     lang_identifier: str = "python" 
     evo_file: str = "main.py"
-    dl_evostate_freq: float = 30
+    dl_evostate_freq: float = 15
 
 @dataclass(frozen=True)
 class BackendConfig:

@@ -44,11 +44,11 @@ class BackendConfig:
     Attributes:
         timeout_sec: Optional timeout in seconds for script execution. If None, no timeout is applied
         extra_cmd_args: Optional dictionary of extra command-line arguments to pass to the evaluation script.
-        conda_env: Optional name of the conda environment to use for execution. If None, the current environment is used.
     """
     extra_cmd_args: Dict[str, Any] = field(default_factory=dict)
     timeout_sec: int = 10 * 60
-    conda_env: Optional[str] = None
+    package_maanager: str = "uv"  # or "pixi"
+    
 
 @dataclass(frozen=True)
 class RayEvolveConfig:

@@ -218,12 +218,8 @@ class RayExecutionBackend(ExecutionBackend):
         # Parse the results directly from the zip bytes
         results = parse_results_from_zip(result_zip_bytes)
         
-        # Add a default error message if the process failed but no explicit error was provided
-
-        # TODO: Need to communicate this info back to LLM agents so than can respond.
-        if returncode == 255 and "timeout" in results.get("stdout_log", "").lower():
-            results["error"] = f"Execution timed out after {self.config.timeout_sec} seconds."
-        elif returncode != 0 and not results.get("error"):
-            results["error"] = f"Process failed with return code {returncode}. See stderr_log."
+        # Communicate this failure back to LLM by appending ot stderr_log. 
+        if returncode != 0:
+            results["stderr_log"] += f"\nProcess failed with return code {returncode}."
         
         return results, rtime, result_zip_bytes

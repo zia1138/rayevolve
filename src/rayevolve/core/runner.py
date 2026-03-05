@@ -12,7 +12,7 @@ import ray
 from rayevolve.core.dbase2 import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, BackendConfig
-from rayevolve.launch.ray_backend import RayExecutionBackend
+from rayevolve.launch.ray_backend import RayExecutionBackend, zip_dir_to_bytes
 import logfire
 
 # Set up logging
@@ -68,7 +68,6 @@ class EvolutionRunner:
 
         self.backend = RayExecutionBackend(
             config=backend_config,
-            project_dir=self.project_dir,
             verbose=verbose,
         )
         
@@ -106,7 +105,6 @@ class EvolutionRunner:
                 gen,
                 self.evo_config,
                 self.backend_config,
-                self.backend.project_zip_bytes,
                 self.db,
                 self.verbose,
             )
@@ -168,8 +166,12 @@ class EvolutionRunner:
         except Exception as e:
             raise ValueError(f"Could not read initial program from {self.project_dir}/{self.evo_config.evo_file}. Error: {e}")
 
+        # Zip the project directory to use as parent_zip_bytes for generation 0
+        parent_zip_bytes = zip_dir_to_bytes(self.project_dir)
+
         # Run the evaluation code using the Ray backend.
         results, rtime, result_zip_bytes = self.backend.run_job(
+            parent_zip_bytes=parent_zip_bytes,
             generated_code=initial_code,
             exec_fname_rel=self.evo_config.evo_file
         )

@@ -1,10 +1,10 @@
+import json
 import random
 import traceback
 import uuid
 import time
 import logging
 from pathlib import Path
-from subprocess import Popen
 import ray
 
 from rayevolve.launch.ray_backend import RayExecutionBackend
@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, ModelMessage, RunContext, RunUsage, UsageLimits
 
 import logfire
-import importlib.metadata
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +51,7 @@ class ExploitContext(BaseModel):
 
 class ExploreContext(BaseModel):
     parent_code: str
+    parent_zip_bytes: bytes
     floor_score: float
     inference_start: float
     run_experiment_count: int = 0
@@ -92,19 +92,16 @@ class EvoWorker:
                  gen: EvoGen,
                  evo_config: EvolutionConfig, 
                  backend_config: BackendConfig,
-                 project_zip_bytes: bytes,
                  db: ProgramDatabase, 
                  verbose: bool):
         super().__init__()  
         self.worker_id = worker_id
         self.gen = gen
         self.evo_config = evo_config
-        self.project_zip_bytes = project_zip_bytes
         self.db = db
         self.verbose = verbose
 
         self.backend = RayExecutionBackend(
-            project_zip_bytes=self.project_zip_bytes,
             config=backend_config,
             verbose=verbose,
         )
@@ -213,6 +210,8 @@ class EvoWorker:
 
     def agent_exploit(self, current_gen: int, parent_selection_top_k: int):
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
+        parent_zip_bytes: bytes = ray.get(self.db.get_zip_bytes.remote(parent.id))
+
         inference_start = time.time()
 
         exploit_template = textwrap.dedent("""
@@ -253,6 +252,7 @@ class EvoWorker:
                 program: Code for the program that achieved a higher score.
             """            
             results, rtime, result_zip_bytes = self.backend.run_job(
+                parent_zip_bytes=parent_zip_bytes,
                 generated_code=program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -313,6 +313,7 @@ class EvoWorker:
             ctx.deps.probe_needed = True
 
             results, rtime, _ = self.backend.run_job(
+                parent_zip_bytes=parent_zip_bytes,
                 generated_code=program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -382,6 +383,7 @@ class EvoWorker:
             """
             ctx.deps.probe_needed = False
             results, rtime, _ = self.backend.run_job(
+                parent_zip_bytes=parent_zip_bytes,
                 generated_code=probe_code,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -420,7 +422,6 @@ class EvoWorker:
 
             
     def agent_explore(self, current_gen: int, parent_selection_top_k: int, explore_performance_floor: float):            
-
         parent: Program = ray.get(self.db.sample_all_topK.remote(parent_selection_top_k))
         inference_start = time.time()
 
@@ -487,6 +488,7 @@ class EvoWorker:
                     refactoring, control-flow alteration, etc.). 
             """
             results, rtime, result_zip_bytes = self.backend.run_job(
+                parent_zip_bytes=ctx.deps.parent_zip_bytes,
                 generated_code=novel_program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -553,6 +555,7 @@ class EvoWorker:
             ctx.deps.probe_needed = True
 
             results, rtime, _ = self.backend.run_job(
+                parent_zip_bytes=ctx.deps.parent_zip_bytes,
                 generated_code=novel_program,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -610,22 +613,36 @@ class EvoWorker:
         def list_packages(ctx: RunContext[ExploreContext]) -> str:
             """Call this tool to list the installed packages in the execution environment."""
             ctx.deps.list_package_count += 1
-            pkg_names = [name for name in sorted(dist.metadata["Name"] for dist in importlib.metadata.distributions())]
-            out_str = "Installed packages:\n" + "\n".join(pkg_names)
-            out_str += "Evaluate whether how each package can help you achieve a novel solution that meets the minimum score requirement."
+            result = self.backend.run_command(
+                parent_zip_bytes=ctx.deps.parent_zip_bytes,
+                cmd=["uv", "pip", "list", "--format=json"],
+            )
+            if result["returncode"] == 0:
+                pkg_names = sorted(pkg["name"] for pkg in json.loads(result["stdout"]))
+                out_str = "Installed packages in the execution environment:\n"
+                out_str += "\n".join(pkg_names)
+                out_str += "\nEvaluate how each package can help you achieve a novel solution that meets the minimum score requirement."
+            else:
+                out_str = f"Failed to list packages: {result['stderr']}"
             return out_str
 
-        # TODO: Need to handle the presence/absence of uv before running agent.
         @evo_explore.tool
         def install_package(ctx: RunContext[ExploreContext], package_name: str) -> str:
-            """Call this tool to install a new package in the execution environment."""
-            # TODO: Direct use of Popen is not ideal here. 
-            process = Popen(["uv", "pip", "install", package_name])
-            process.wait()
-            if process.returncode == 0:
-                return f"Package {package_name} installed successfully."
+            """Call this tool to install a new package in the execution environment.
+            Args:
+                package_name: Name of the package to install (e.g. 'scikit-learn', 'xgboost>=1.5').
+            """
+            results, updated_zip = self.backend.run_command_with_zip(
+                parent_zip_bytes=ctx.deps.parent_zip_bytes,
+                cmd=["uv", "add", package_name],
+            )
+            returncode = results.get("returncode")
+            if returncode == 0:
+                ctx.deps.parent_zip_bytes = updated_zip
+                return f"Package '{package_name}' installed successfully."
             else:
-                return f"Failed to install package {package_name}."
+                stderr = results.get("stderr_log", "").strip()
+                return f"Failed to install '{package_name}': {stderr}"
 
         @evo_explore.tool
         async def consult_package_expert(ctx: RunContext[ExploreContext], novel_program: str) -> str:
@@ -674,6 +691,7 @@ class EvoWorker:
             """
             ctx.deps.probe_needed = False
             results, rtime, _ = self.backend.run_job(
+                parent_zip_bytes=ctx.deps.parent_zip_bytes,
                 generated_code=probe_code,
                 exec_fname_rel=self.evo_config.evo_file
             )
@@ -702,7 +720,10 @@ class EvoWorker:
             return out_str
 
         try:
-            explore_ctx = ExploreContext(parent_code=parent.code, floor_score=floor_score, inference_start=inference_start)
+            explore_ctx = ExploreContext(parent_code=parent.code, 
+                                         parent_zip_bytes=ray.get(self.db.get_zip_bytes.remote(parent.id)), 
+                                         floor_score=floor_score, 
+                                         inference_start=inference_start)
             evo_explore.run_sync(explore_prompt, deps=explore_ctx)
         except Exception as e:
             print(f"evo_explore encountered an error: {e}")

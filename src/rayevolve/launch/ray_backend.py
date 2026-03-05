@@ -75,6 +75,7 @@ def ray_evaluator_task(
         # 3. Setup environment variables
         env = os.environ.copy()
         env.update(PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+        env.pop("VIRTUAL_ENV", None) # TODO: Make this a parameter for only when uv is used.
 
         # 4. Execute the command
         try:
@@ -117,6 +118,7 @@ def ray_run_command_task(
 
         env = os.environ.copy()
         env.update(PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+        env.pop("VIRTUAL_ENV", None) # TODO: Make this a parameter for only when uv is used.
 
         try:
             cp = subprocess.run(
@@ -233,7 +235,7 @@ class RayExecutionBackend(ExecutionBackend):
     def _build_command(self) -> List[str]:
         base = []
         if self.config.package_maanager == "uv":
-            base = ["uv", "run"]
+            base = ["uv", "-q", "run"]
         elif self.config.package_maanager == "pixi":
             base = ["pixi", "run"]
         cmd = [

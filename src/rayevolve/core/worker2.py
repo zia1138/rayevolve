@@ -409,7 +409,6 @@ class EvoWorker:
                 raise ModelRetry(f"Probe failed with error:\n{stderr[:1000]}\nFix the probe code and try again.")
             else:
                 out_str += "Use this information to improve the program in your next attempt. If there was an error, rerun the `probe` tool.\n"
-            # NOTE: This is an issue for any concurrency in this agent.
             return out_str
 
         try:

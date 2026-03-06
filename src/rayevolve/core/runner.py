@@ -71,6 +71,7 @@ class EvolutionRunner:
             verbose=verbose,
         )
         
+        # TODO: Need to test if resume works correctly.
         if self.resuming_run:
             state_file = Path(f"{self.results_dir}/evogen_state.json")
             completed_generations = 0

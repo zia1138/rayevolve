@@ -257,8 +257,8 @@ class EvoWorker:
                 exec_fname_rel=self.evo_config.evo_file
             )
 
-            if results['correct']['correct']:
-                combined = results.get("metrics", {}).get("combined_score")
+            if results['correct']:
+                combined = results.get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.parent_score:
                         # Add the program to the database
@@ -319,9 +319,9 @@ class EvoWorker:
             )
 
             out_str = ""
-            if results['correct']['correct']:
+            if results['correct']:
                 out_str += "The program executed correctly and produced a valid result.\n"
-                combined = results.get("metrics", {}).get("combined_score")
+                combined = results.get("combined_score")
                 if combined is not None:
                     out_str += f"It achieved a score of {combined}\n"
                     if combined > ctx.deps.parent_score:
@@ -492,8 +492,8 @@ class EvoWorker:
                 exec_fname_rel=self.evo_config.evo_file
             )
 
-            if results['correct']['correct']:
-                combined = results.get("metrics", {}).get("combined_score")
+            if results['correct']:
+                combined = results.get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.floor_score:
                         db_program = Program(
@@ -560,8 +560,8 @@ class EvoWorker:
             )
 
             out_str = ""
-            if results['correct']['correct']:
-                combined = results.get("metrics", {}).get("combined_score")
+            if results['correct']:
+                combined = results.get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
                     if combined > ctx.deps.floor_score:

@@ -1,13 +1,13 @@
+import sys
+import uuid
 import json
+import importlib.util
 from pathlib import Path
-from typing import Dict, Any
 
 import numpy as np
 import pandas as pd
-import typer
 from sklearn.metrics import confusion_matrix
 
-app = typer.Typer(add_completion=False)
 
 def load_module_from_path(file_path: str | Path, unique: bool = True):
     path = Path(file_path).resolve()
@@ -29,36 +29,14 @@ def load_module_from_path(file_path: str | Path, unique: bool = True):
 
     return module
 
-def save_json_results(
-    results_dir: str | Path,
-    metrics: Dict[str, Any],
-    correct: bool,
-    error: Optional[str] = None,
-) -> None:
-    """Saves metrics and correctness status to JSON files."""
-    results_path = Path(results_dir)
-    results_path.mkdir(parents=True, exist_ok=True)
 
-    correct_payload = {"correct": correct, "error": error}
-    correct_file = results_path / "correct.json"
-    with open(correct_file, "w") as f:
-        json.dump(correct_payload, f, indent=4)
-    #print(f"Correctness and error status saved to {correct_file}")
-
-    metrics_file = results_path / "metrics.json"
-    with open(metrics_file, "w") as f:
-        json.dump(metrics, f, indent=4)
-    #print(f"Metrics saved to {metrics_file}")    
-
-def calculate_metrics(y_true: np.ndarray, y_score: np.ndarray) -> Dict[str, Any]:
+def calculate_metrics(y_true: np.ndarray, y_score: np.ndarray) -> dict:
     """Calculates TPR at FPR = 0.05."""
     FPR_TARGET = 0.05
-    
-    # Threshold from negative-class quantile
+
     neg_scores = y_score[y_true == 0]
     thr = float(np.quantile(neg_scores, 1.0 - FPR_TARGET))
-    
-    # Strictly greater-than to respect the targeted FPR
+
     thr = np.nextafter(thr, np.inf)
     y_pred = (y_score > thr).astype(int)
 
@@ -73,37 +51,24 @@ def calculate_metrics(y_true: np.ndarray, y_score: np.ndarray) -> Dict[str, Any]
         "tp": int(tp),
         "fp": int(fp),
         "tn": int(tn),
-        "fn": int(fn)
+        "fn": int(fn),
     }
 
-def main(
-    program_path: str = typer.Option("main.py"),
-    results_dir: str = typer.Option("results"),
-    data_dir: str = typer.Option("."),
-):
-    data_path = Path(data_dir)
-    
-    # 1. Load Data
-    X_train = pd.read_csv(data_path / "X_train.csv", index_col=0)
-    y_train = pd.read_csv(data_path / "y_train.csv", index_col=0)
-    X_val = pd.read_csv(data_path / "X_val.csv", index_col=0)
-    y_val_true = pd.read_csv(data_path / "y_val.csv", index_col=0)
 
-    # 2. Load and Run Candidate
-    candidate_module = load_module_from_path(program_path)
-    
-    # Predict probabilities
+if __name__ == "__main__":
+    X_train = pd.read_csv("X_train.csv", index_col=0)
+    y_train = pd.read_csv("y_train.csv", index_col=0)
+    X_val = pd.read_csv("X_val.csv", index_col=0)
+    y_val_true = pd.read_csv("y_val.csv", index_col=0)
+
+    candidate_module = load_module_from_path("main.py")
     y_val_proba_df = candidate_module.preprocess_train_and_predict(X_train, y_train, X_val)
-    
-    # Ensure correct format
+
     y_score = y_val_proba_df["y_proba"].values
     y_true = y_val_true.loc[y_val_proba_df.index].iloc[:, 0].values.astype(int)
 
-    # 3. Score
     metrics = calculate_metrics(y_true, y_score)
-    
-    # Save for RayEvolve
-    save_json_results(results_dir, metrics, correct=True)
+    result = {"correct": True, "error": None, **metrics}
 
-if __name__ == "__main__":
-    typer.run(main)
+    with open("results.json", "w") as f:
+        json.dump(result, f, indent=4)

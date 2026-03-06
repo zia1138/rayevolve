@@ -177,8 +177,8 @@ class EvolutionRunner:
             exec_fname_rel=self.evo_config.evo_file
         )
 
-        if results['correct']['correct']: 
-            combined = results.get("metrics", {}).get("combined_score")
+        if results['correct']:
+            combined = results.get("combined_score")
             db_program = Program(
                 id=str(uuid.uuid4()),
                 code=initial_code,

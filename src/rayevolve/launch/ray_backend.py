@@ -148,8 +148,12 @@ def ray_run_command_task(
 import json
 
 def parse_results_from_zip(zip_bytes: bytes) -> dict:
-    """Parses returncode, metrics, correct, and logs directly from an in-memory zip archive."""
-    loaded_results = {"returncode": None, "correct": {"correct": False}, "metrics": {}}
+    """Parses returncode, results.json, and logs directly from an in-memory zip archive.
+
+    Returns a flat dict with keys: returncode, correct, error, combined_score,
+    any other metrics from results.json, stdout_log, stderr_log.
+    """
+    loaded_results: dict = {"returncode": None, "correct": False, "error": None}
     buffer = io.BytesIO(zip_bytes)
 
     with zipfile.ZipFile(buffer, 'r') as zf:
@@ -161,27 +165,14 @@ def parse_results_from_zip(zip_bytes: bytes) -> dict:
             except json.JSONDecodeError:
                 logger.warning("Could not decode JSON from returncode.json in zip.")
 
-        if "metrics.json" in namelist:
+        if "results.json" in namelist:
             try:
-                loaded_results["metrics"] = json.loads(zf.read("metrics.json").decode("utf-8"))
+                loaded_results.update(json.loads(zf.read("results.json").decode("utf-8")))
             except json.JSONDecodeError:
-                logger.warning("Could not decode JSON from metrics.json in zip.")
+                logger.warning("Could not decode JSON from results.json in zip.")
 
-        if "correct.json" in namelist:
-            try:
-                loaded_results["correct"] = json.loads(zf.read("correct.json").decode("utf-8"))
-            except json.JSONDecodeError:
-                pass
-
-        if "job_log.out" in namelist:
-            loaded_results["stdout_log"] = zf.read("job_log.out").decode("utf-8")
-        else:
-            loaded_results["stdout_log"] = ""
-
-        if "job_log.err" in namelist:
-            loaded_results["stderr_log"] = zf.read("job_log.err").decode("utf-8")
-        else:
-            loaded_results["stderr_log"] = ""
+        loaded_results["stdout_log"] = zf.read("job_log.out").decode("utf-8") if "job_log.out" in namelist else ""
+        loaded_results["stderr_log"] = zf.read("job_log.err").decode("utf-8") if "job_log.err" in namelist else ""
 
     return loaded_results
 
@@ -234,9 +225,9 @@ class RayExecutionBackend(ExecutionBackend):
 
     def _build_command(self) -> List[str]:
         base = []
-        if self.config.package_maanager == "uv":
+        if self.config.package_manager == "uv":
             base = ["uv", "-q", "run"]
-        elif self.config.package_maanager == "pixi":
+        elif self.config.package_manager == "pixi":
             base = ["pixi", "run"]
         cmd = [
             *base,
@@ -253,7 +244,6 @@ class RayExecutionBackend(ExecutionBackend):
         exec_fname_rel: str
     ) -> Tuple[Dict[str, Any], float, bytes]:
 
-        # We tell evaluate.py to output results to ".", which is the root of the temp dir
         cmd = self._build_command()
 
         t0 = time.time()

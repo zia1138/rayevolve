@@ -47,7 +47,7 @@ class BackendConfig:
     """
     extra_cmd_args: Dict[str, Any] = field(default_factory=dict)
     timeout_sec: int = 10 * 60
-    package_maanager: str = "uv"  # or "pixi"
+    package_manager: str = "uv"  # or "pixi"
     
 
 @dataclass(frozen=True)

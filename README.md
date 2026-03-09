@@ -62,7 +62,11 @@ parameters.
 * [station](https://github.com/dualverse-ai/station)
 * [CSE/EvoControl](https://github.com/QuantaAlpha/EvoControl)
 
-# rayevolve on Lightning AI Studios
+
+# Cluster Support
+
+<details>
+<summary>Lightning AI Studios</summary>
 
 We provide a script [mmt_cluster.sh](mmt_cluster.sh) to launch a ray cluster on [Lightning AI Studios](https://lightning.ai) using 
 [multimachine training](https://lightning.ai/docs/overview/multi-node-training/cli-commands) (MMT).

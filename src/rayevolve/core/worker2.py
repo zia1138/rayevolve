@@ -48,12 +48,14 @@ class ExploitContext(BaseModel):
     parent_score: float
     inference_start: float
     probe_needed: bool = False
+    llm_id: str
 
 class ExploreContext(BaseModel):
     parent_code: str
     parent_zip_bytes: bytes
     floor_score: float
     inference_start: float
+    llm_id: str
     run_experiment_count: int = 0
     list_package_count: int = 0
     inspiration_count: int = 0
@@ -117,6 +119,7 @@ class EvoWorker:
         # TODO: Need to limit to some max number of generations or some stopping criterion.
         while True:
             current_gen: int = ray.get(self.gen.next.remote())
+            logger.info(f"Worker {self.worker_id} at Generation {current_gen} running strategy.")
             self.run_strategy(current_gen)
             if current_gen >= self.evo_config.max_generations - 1:
                 logger.info(f"Worker {self.worker_id}: Reached max generations ({self.evo_config.max_generations}). Stopping evolution.")
@@ -124,7 +127,6 @@ class EvoWorker:
             
     def run_strategy(self, current_gen: int):            
         best_score_table = ray.get(self.db.get_best_score_table.remote()) 
-
         # TODO: Modify so it also selects the model class to use.
         # TODO: Modify so it makes a judgement on how much to allow lower scores in during exploration and doesn't use hard coded values.
         # TODO: Include additional data such as gain in score per program and difficulty metrics to inform strategy.
@@ -201,7 +203,7 @@ class EvoWorker:
             weights=[weights["exploit_weight"], weights["explore_weight"]],
             k=1,
         )[0]
-
+        logger.info(f"EvoStrategist Selected: {mode}")
         if mode == "exploit":
             self.agent_exploit(current_gen, probs.exploit_top_k)
         else:
@@ -257,7 +259,7 @@ class EvoWorker:
                 exec_fname_rel=self.evo_config.evo_file
             )
 
-            if results['correct']:
+            if results.get('correct'):
                 combined = results.get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.parent_score:
@@ -268,13 +270,12 @@ class EvoWorker:
                             parent_id=parent.id,
                             generation=current_gen,
                             language=self.evo_config.lang_identifier,
-                            code_diff="agent_exploit",
+                            agent_id="agent_exploit",
+                            llm_id = ctx.deps.llm_id,
                             correct=True,
                             combined_score=combined,
-                            metadata={
-                                "inference_time": time.time() - ctx.deps.inference_start,
-                                "compute_time": rtime,
-                            }
+                            inference_time=time.time() - ctx.deps.inference_start,
+                            compute_time=rtime,
                         )
                         ray.get(self.db.add.remote(db_program))
                         ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
@@ -319,7 +320,7 @@ class EvoWorker:
             )
 
             out_str = ""
-            if results['correct']:
+            if results.get('correct'):
                 out_str += "The program executed correctly and produced a valid result.\n"
                 combined = results.get("combined_score")
                 if combined is not None:
@@ -413,6 +414,7 @@ class EvoWorker:
 
         try:
             exploit_ctx = ExploitContext(parent_code=parent.code,
+                                         llm_id=selected.description,
                                          parent_score=parent.combined_score,
                                          inference_start=inference_start)
             evo_exploit.run_sync(exploit_prompt, deps=exploit_ctx)
@@ -492,7 +494,7 @@ class EvoWorker:
                 exec_fname_rel=self.evo_config.evo_file
             )
 
-            if results['correct']:
+            if results.get('correct'):
                 combined = results.get("combined_score")
                 if combined is not None:
                     if combined > ctx.deps.floor_score:
@@ -501,14 +503,13 @@ class EvoWorker:
                             code=novel_program,
                             parent_id=parent.id,
                             generation=current_gen,
-                            code_diff="agent_explore",
+                            agent_id="agent_explore",
+                            llm_id = ctx.deps.llm_id,
                             correct=True,
                             combined_score=combined,
                             language=self.evo_config.lang_identifier,
-                            metadata={
-                                "inference_time": time.time() - ctx.deps.inference_start,
-                                "compute_time": rtime,
-                            }
+                            inference_time=time.time() - ctx.deps.inference_start,
+                            compute_time=rtime
                         )
                         ray.get(self.db.add.remote(db_program))
                         ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
@@ -560,7 +561,7 @@ class EvoWorker:
             )
 
             out_str = ""
-            if results['correct']:
+            if results.get('correct'):
                 combined = results.get("combined_score")
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
@@ -721,6 +722,7 @@ class EvoWorker:
         try:
             explore_ctx = ExploreContext(parent_code=parent.code, 
                                          parent_zip_bytes=ray.get(self.db.get_zip_bytes.remote(parent.id)), 
+                                         llm_id = selected.description,
                                          floor_score=floor_score, 
                                          inference_start=inference_start)
             evo_explore.run_sync(explore_prompt, deps=explore_ctx)

@@ -50,25 +50,20 @@ class Program:
     id: str
     code: str
     language: str 
+    agent_id: str
+    llm_id: str
+    timestamp: float = field(default_factory=time.time) 
 
     # Evolution information
     parent_id: Optional[str] = None
-    archive_inspiration_ids: List[str] = field(default_factory=list)
-    top_k_inspiration_ids: List[str] = field(default_factory=list)
     generation: int = 0
-    timestamp: float = field(default_factory=time.time)
-    code_diff: Optional[str] = None
+    inference_time: float = 0.0
+    compute_time: float = 0.0
 
     # Performance metrics
     combined_score: float = 0.0
-    public_metrics: Dict[str, Any] = field(default_factory=dict)
-    private_metrics: Dict[str, Any] = field(default_factory=dict)
-    text_feedback: Union[str, List[str]] = ""
     correct: bool = False
     children_count: int = 0
-
-    # Metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict representation, cleaning NaN values for JSON."""
@@ -78,15 +73,6 @@ class Program:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Program":
         """Create from dictionary representation, ensuring correct types for nested dicts."""
-        data["public_metrics"] = data.get("public_metrics") if isinstance(data.get("public_metrics"), dict) else {}
-        data["private_metrics"] = data.get("private_metrics") if isinstance(data.get("private_metrics"), dict) else {}
-        data["metadata"] = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-        
-        archive_ids_val = data.get("archive_inspiration_ids")
-        data["archive_inspiration_ids"] = archive_ids_val if isinstance(archive_ids_val, list) else []
-
-        top_k_ids_val = data.get("top_k_inspiration_ids")
-        data["top_k_inspiration_ids"] = top_k_ids_val if isinstance(top_k_ids_val, list) else []
 
         program_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_data = {k: v for k, v in data.items() if k in program_fields}
@@ -253,7 +239,7 @@ class ProgramDatabase:
                 best_score_so_far = p.combined_score
                 
             timestamp = int(round(p.timestamp, 0))
-            inference_time = int(round(p.metadata.get("inference_time", 0), 0))
+            inference_time = int(round(p.inference_time, 0))
             
             history_lines.append(f"{timestamp}\t{inference_time}\t{best_score_so_far}")
             

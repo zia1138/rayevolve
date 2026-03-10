@@ -101,6 +101,7 @@ class EvolutionRunner:
 
         all_refs = []
         for worker_id in range(self.evo_config.num_agent_workers):
+            logger.info(f"Starting worker {worker_id}.")
             worker = EvoWorker.remote(
                 str(worker_id),
                 gen,
@@ -111,6 +112,8 @@ class EvolutionRunner:
             )
             all_refs.append(worker.run.remote())
 
+        # Periodically check the database for new results and update local data on the 
+        # driver script to keep track of progress and save intermediate results. 
         cur_gen: int = ray.get(gen.get.remote()) 
         while cur_gen < self.evo_config.max_generations:
             zip_bytes: bytes = ray.get(self.db.download_database_zip.remote())
@@ -177,23 +180,19 @@ class EvolutionRunner:
             exec_fname_rel=self.evo_config.evo_file
         )
 
-        if results['correct']:
-            combined = results.get("combined_score")
+        if results.get('correct'):
+            combined :float = results.get("combined_score")
+            # TODO: Update dbase2.Program to avoid metadata field.
             db_program = Program(
                 id=str(uuid.uuid4()),
                 code=initial_code,
                 parent_id=None,
+                llm_id="initial",
+                agent_id = "initial",
                 generation=0,
-                code_diff="initial",
                 correct=True,
                 combined_score=combined,
                 language=self.evo_config.lang_identifier,
-                metadata={
-                    "inference_time": 0.0,  # No inference time for generation 0
-                    "compute_time": rtime,
-                    "stdout_log": results.get("stdout_log", ""),
-                    "stderr_log": results.get("stderr_log", ""),
-                }
             )
 
             ray.get(self.db.add.remote(db_program, verbose=True))

@@ -37,6 +37,9 @@ copyright = """
 Copyright &copy; 2026 Zia Khan
 """
 
+repo_url = "https://github.com/zia1138/rayevolve"
+repo_name = "zia1138/rayevolve"
+
 # Zensical supports both implicit navigation and explicitly defined navigation.
 # If you decide not to define a navigation here then Zensical will simply
 # derive the navigation structure from the directory structure of your
@@ -313,3 +316,15 @@ paths = ["src"]
 docstring_style = "google"
 inherited_members = true
 show_source = false
+#show_root_heading = true
+#show_root_full_path = true
+#show_root_members_full_path = true
+#show_object_full_path = true
+# global options above don't seem to work, add these locally to docs/api.md
+# e.g.
+# ::: rayevolve.core.common
+#    options:
+#      show_root_heading: true
+#      show_root_full_path: true
+#      show_root_members_full_path: true
+#      show_object_full_path: true

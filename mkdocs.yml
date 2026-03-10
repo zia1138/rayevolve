@@ -1,8 +1,0 @@
-site_name: rayevolve
-theme:
-  name: material
-  palette:
-    scheme: slate
-    
-nav:
-  - Home: index.md

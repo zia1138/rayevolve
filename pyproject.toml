@@ -22,7 +22,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "mkdocs-material>=9.7.4",
     "ipykernel>=7.1.0",
     "nbconvert>=7.16.6",
     "networkx",
@@ -30,4 +29,6 @@ dev = [
     "matplotlib",
     "numpy",
     "pandas",
+    "zensical>=0.0.24",
+    "mkdocstrings-python>=2.0.3",
 ]

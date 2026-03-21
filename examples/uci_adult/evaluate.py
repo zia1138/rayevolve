@@ -40,18 +40,11 @@ def calculate_metrics(y_true: np.ndarray, y_score: np.ndarray) -> dict:
     thr = np.nextafter(thr, np.inf)
     y_pred = (y_score > thr).astype(int)
 
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    _, _, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
     tpr = float(tp / (tp + fn)) if (tp + fn) else 0.0
-    actual_fpr = float(fp / (fp + tn)) if (fp + tn) else 0.0
 
     return {
-        "combined_score": tpr,
-        "tpr": tpr,
-        "fpr": actual_fpr,
-        "tp": int(tp),
-        "fp": int(fp),
-        "tn": int(tn),
-        "fn": int(fn),
+        "combined_score": tpr
     }
 
 

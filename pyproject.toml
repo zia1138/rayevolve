@@ -17,7 +17,7 @@ dependencies = [
 rayevolve = "rayevolve.run:app"
 
 [build-system]
-requires = ["uv_build>=0.9.6,<0.10.0"]
+requires = ["uv_build>=0.10.11,<0.11.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
@@ -31,4 +31,5 @@ dev = [
     "pandas",
     "zensical>=0.0.24",
     "mkdocstrings-python>=2.0.3",
+    "huggingface-hub>=1.6.0",
 ]

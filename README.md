@@ -56,12 +56,13 @@ parameters.
 
 # Related Open Source Projects
 
+* [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve)
 * [OpenEvolve](https://github.com/algorithmicsuperintelligence/openevolve)
 * [LLM4AD](https://github.com/Optima-CityU/llm4ad)
 * [GigaEvo](https://github.com/AIRI-Institute/gigaevo-platform/tree/main)
 * [station](https://github.com/dualverse-ai/station)
 * [CSE/EvoControl](https://github.com/QuantaAlpha/EvoControl)
-
+* [TTT-Discover](https://github.com/test-time-training/discover)
 
 # Cluster Support
 

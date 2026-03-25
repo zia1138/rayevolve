@@ -49,6 +49,7 @@ class ExploitContext(BaseModel):
     inference_start: float
     probe_needed: bool = False
     llm_id: str
+    submitted: bool = False
 
 class ExploreContext(BaseModel):
     parent_code: str
@@ -60,6 +61,7 @@ class ExploreContext(BaseModel):
     list_package_count: int = 0
     inspiration_count: int = 0
     probe_needed: bool = False
+    submitted : bool = False
 
 
 @ray.remote(num_cpus=0)
@@ -237,7 +239,7 @@ class EvoWorker:
               but with an improved internal implementation. You may use modularization and helper functions as needed.
             
             ### COMPLETION
-            - As soon as you achieve a score greater than {score}, submit your improved program using `submit`.
+            - If you identify a program that increases the score relative to the parent, finish immediately.
             - If you cannot beat the score of the above code after 5 distinct approaches, give up and offer an explanation why.
          """)
 
@@ -245,24 +247,52 @@ class EvoWorker:
                                                  score=parent.combined_score,
                                                  lang_identifier=self.evo_config.lang_identifier)
 
+        # TODO: Need to catch exceptons/errors here properly and notify the driver.
+        evo_models = self.evo_config.build_evo_models()
+        #
+        selected = random.choice(evo_models)
+        model = selected.model
+        settings = selected.settings
+        evo_exploit = Agent(
+            model,
+            system_prompt=self.evo_config.task_sys_msg,
+            deps_type=ExploitContext,
+            retries=3,
+            model_settings=settings)
 
-        def submit(ctx: RunContext[ExploitContext], program: str) -> None:
+        @evo_exploit.tool
+        def run_experiment(ctx: RunContext[ExploitContext], program: str, change: str) -> str:
             """
-            Submit an improved program when you achieve a higher score relative to the parent program.
-            Use this tool immediately when `run_experiment` shows that your program has a higher score.
+            Call this tool with an improved program that you want to evaluate. It will return
+            the results of executing the program including its score, correctness, and stdout/stderr.
             Args:
-                program: Code for the program that achieved a higher score.
-            """            
+                program: A program that you think will achieve a higher score.
+                change: A detailed description of the change being tested and why it should improve performance.
+            Returns:
+                str: A human-readable report of the results of the experiment.
+            """
+
+            if ctx.deps.submitted:
+                return "You have already found a program that improved the score. You are done."
+
+            if self.evo_config.force_probing and ctx.deps.probe_needed:
+                return "You must use `probe` to gather information that will help you improve the program before another run_experiment."
+            ctx.deps.probe_needed = True
+
             results, rtime, result_zip_bytes = self.backend.run_job(
                 parent_zip_bytes=parent_zip_bytes,
                 generated_code=program,
                 exec_fname_rel=self.evo_config.evo_file
             )
 
+            out_str = ""
             if results.get('correct'):
+                out_str += "The program executed correctly and produced a valid result.\n"
                 combined = results.get("combined_score")
                 if combined is not None:
+                    out_str += f"It achieved a score of {combined}\n"
                     if combined > ctx.deps.parent_score:
+                        # out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. You can now use `submit`.\n"
                         # Add the program to the database
                         db_program = Program(
                             id=str(uuid.uuid4()),
@@ -278,55 +308,10 @@ class EvoWorker:
                             compute_time=rtime,
                         )
                         ray.get(self.db.add.remote(db_program))
-                        ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
-                    else:
-                        raise ModelRetry("Improved program did not achieve a higher score on submission. Analyze why it failed and fix the issue.")
-                else:
-                    raise ModelRetry("Improved program did not return a score on submission. Analyze why this happened and fix the issue.")
-            else:
-                raise ModelRetry("Improved program was not correct on submission. Analyze why this happened and fix the issue. Here is the error:", results.get("error", "Unknown Error"))
-
-        evo_models = self.evo_config.build_evo_models()
-        selected = random.choice(evo_models)
-        model = selected.model
-        settings = selected.settings
-        evo_exploit = Agent(
-            model,
-            system_prompt=self.evo_config.task_sys_msg,
-            deps_type=ExploitContext,
-            output_type=[str, submit],
-            retries=3,
-            model_settings=settings)
-
-        @evo_exploit.tool
-        def run_experiment(ctx: RunContext[ExploitContext], program: str, change: str) -> str:
-            """
-            Call this tool with an improved program that you want to evaluate. It will return
-            the results of executing the program including its score, correctness, and stdout/stderr.
-            Args:
-                program: A program that you think will achieve a higher score.
-                change: A detailed description of the change being tested and why it should improve performance.
-            Returns:
-                str: A human-readable report of the results of the experiment.
-            """
-            if self.evo_config.force_probing and ctx.deps.probe_needed:
-                return "You must use `probe` to gather information that will help you improve the program before another run_experiment."
-            ctx.deps.probe_needed = True
-
-            results, rtime, _ = self.backend.run_job(
-                parent_zip_bytes=parent_zip_bytes,
-                generated_code=program,
-                exec_fname_rel=self.evo_config.evo_file
-            )
-
-            out_str = ""
-            if results.get('correct'):
-                out_str += "The program executed correctly and produced a valid result.\n"
-                combined = results.get("combined_score")
-                if combined is not None:
-                    out_str += f"It achieved a score of {combined}\n"
-                    if combined > ctx.deps.parent_score:
-                        out_str += f"This is an improvement over the parent program's score of {ctx.deps.parent_score}. You can now use `submit`.\n"
+                        ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))                        
+                        ctx.deps.submitted = True
+                        out_str = f"Congratulations! This program achieved a score of {combined}, which is an improvement over the parent program's score of {ctx.deps.parent_score}."
+                        out_str += "This program has been submitted to the database. You are done.\n"
                     else:
                         out_str += f"However, this is not an improvement over the parent program's score of {ctx.deps.parent_score}. Run the `probe` tool to help you analyze how you can improve the score.\n"
                 else:
@@ -356,6 +341,7 @@ class EvoWorker:
         def probe(ctx: RunContext[ExploitContext], probe_code: str, intent: str) -> str:
             """
             Run a diagnostic probe: modify the program to emit targeted, low-cost evidence about why it is performing as it is.
+            Assume that this probe code uses the same entry point as the original program.
 
             A valid probe must aim to uncover actionable structure. Depending on the problem, this may include:
             - surface structure and interfaces (e.g., variable/feature names, schema, types, units, ranges, missingness patterns, category cardinalities),
@@ -416,7 +402,7 @@ class EvoWorker:
             exploit_ctx = ExploitContext(parent_code=parent.code,
                                          llm_id=selected.description,
                                          parent_score=parent.combined_score,
-                                         inference_start=inference_start)
+                                         inference_start=inference_start, submitted = False)
             evo_exploit.run_sync(exploit_prompt, deps=exploit_ctx)
         except Exception as e:
             print(f"evo_exploit encountered an error: {e}")
@@ -463,7 +449,7 @@ class EvoWorker:
             - Make sure you perform research using the `consult_package_expert` tool to identify useful packages for your novel program that
               you should install and import to obtain novel solutions.                                           
             - Make sure you perform research using the `probe` tool to gather information that will help you find a novel and correct program.                                           
-            - If you have a novel program that achieves a score greater than {floor_score}, use the `submit` tool to submit your novel program immediately.
+            - If you have a novel program that achieves a score greater than {floor_score}, then you are done.
             - If you cannot find a correct, novel program that achieves the minimum score, after 5 attempts explain why and give up.
         """)
 
@@ -472,59 +458,19 @@ class EvoWorker:
                                                 floor_score=floor_score,
                                                 lang_identifier=self.evo_config.lang_identifier)
 
+        # TODO: Need to catch exceptons/errors here properly and notify the driver.
         evo_models = self.evo_config.build_evo_models()
+        #  - 
         selected = random.choice(evo_models)
         model = selected.model
         settings = selected.settings
         package_expert = Agent(model, model_settings=settings, system_prompt=self.evo_config.task_sys_msg)
 
-        async def submit(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> None:
-            """
-            Submit a proposed novel program that meets the minimum score. Run this tool immediately if
-            you have determined your program is novel and `run_experiment` shows it meets the minimum score.
-            Args:
-                novel_program: A novel program that is dramatically different from the parent that 
-                    still functions correctly.
-                change: A detailed description of the modifications made (e.g. , conceptual, algorithmic change,
-                    refactoring, control-flow alteration, etc.). 
-            """
-            results, rtime, result_zip_bytes = self.backend.run_job(
-                parent_zip_bytes=ctx.deps.parent_zip_bytes,
-                generated_code=novel_program,
-                exec_fname_rel=self.evo_config.evo_file
-            )
-
-            if results.get('correct'):
-                combined = results.get("combined_score")
-                if combined is not None:
-                    if combined > ctx.deps.floor_score:
-                        db_program = Program(
-                            id=str(uuid.uuid4()),
-                            code=novel_program,
-                            parent_id=parent.id,
-                            generation=current_gen,
-                            agent_id="agent_explore",
-                            llm_id = ctx.deps.llm_id,
-                            correct=True,
-                            combined_score=combined,
-                            language=self.evo_config.lang_identifier,
-                            inference_time=time.time() - ctx.deps.inference_start,
-                            compute_time=rtime
-                        )
-                        ray.get(self.db.add.remote(db_program))
-                        ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
-                    else:
-                        raise ModelRetry("Novel program did not achieve the minimum score on submission.  Analyze why it failed and fix the issue.")
-                else:
-                    raise ModelRetry("Novel program did not return a score on submission. Analyze why this happened and fix the issue.")
-            else:
-                raise ModelRetry("Novel program was not correct on submission. Analyze why this happened and fix the issue. Here is the error: " + results.get("error", "Unknown Error"))
 
         evo_explore = Agent(
             model,
             system_prompt=self.evo_config.task_sys_msg,
             deps_type=ExploreContext,
-            output_type=[str, submit],
             retries=3,
             model_settings=settings)
 
@@ -540,6 +486,9 @@ class EvoWorker:
             Returns:
                 str: feedback for the agent including correctness, score, stdout, and stderr.
             """
+            if ctx.deps.submitted:
+                return "You have already found a novel program that meets the minimum score requirement. You are done."
+
             if ctx.deps.run_experiment_count > 0:
                 if ctx.deps.list_package_count == 0:
                     return "You must use `list_packages` or `consult_package_expert` to research useful packages at least once before running another experiment."                
@@ -554,7 +503,7 @@ class EvoWorker:
             ctx.deps.run_experiment_count += 1
             ctx.deps.probe_needed = True
 
-            results, rtime, _ = self.backend.run_job(
+            results, rtime, result_zip_bytes = self.backend.run_job(
                 parent_zip_bytes=ctx.deps.parent_zip_bytes,
                 generated_code=novel_program,
                 exec_fname_rel=self.evo_config.evo_file
@@ -566,7 +515,25 @@ class EvoWorker:
                 if combined is not None:
                     out_str += f"The program executed correctly.\n"
                     if combined > ctx.deps.floor_score:
-                        out_str += f"It achieved a score of {combined}, which is an improvement over the minimum score of {ctx.deps.floor_score}.\n"
+                        #out_str += f"It achieved a score of {combined}, which is an improvement over the minimum score of {ctx.deps.floor_score}.\n"
+                        db_program = Program(
+                            id=str(uuid.uuid4()),
+                            code=novel_program,
+                            parent_id=parent.id,
+                            generation=current_gen,
+                            agent_id="agent_explore",
+                            llm_id = ctx.deps.llm_id,
+                            correct=True,
+                            combined_score=combined,
+                            language=self.evo_config.lang_identifier,
+                            inference_time=time.time() - ctx.deps.inference_start,
+                            compute_time=rtime
+                        )
+                        ray.get(self.db.add.remote(db_program))
+                        ray.get(self.db.add_zip_bytes.remote(db_program.id, result_zip_bytes))
+                        ctx.deps.submitted = True
+                        out_str += f"Congratulations! This program achieved a score of {combined}, which is an improvement over the minimum score of {ctx.deps.floor_score}.\n"
+                        out_str += "This program has been submitted to the database. You are done.\n"
                     else:
                         out_str += f"It achieved a score of {combined}, which is NOT an improvement over the minimum score of {ctx.deps.floor_score}.\n"
                         out_str += "Use the `probe` tool to help you analyze how you can improve the score.\n"
@@ -663,6 +630,7 @@ class EvoWorker:
         def probe(ctx: RunContext[ExploreContext], probe_code: str, intent: str) -> str:
             """
             Run a diagnostic probe: modify the program to emit targeted, low-cost evidence about why it is performing as it is.
+            Assume that this probe code uses the same entry point as the original program.
 
             A valid probe must aim to uncover actionable structure. Depending on the problem, this may include:
             - surface structure and interfaces (e.g., variable/feature names, schema, types, units, ranges, missingness patterns, category cardinalities),

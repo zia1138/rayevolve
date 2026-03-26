@@ -1,6 +1,0 @@
-[project]
-name = "cobench-tsp"
-version = "0.1.0"
-description = "CO-Bench Travelling Salesman Problem for rayevolve"
-requires-python = ">=3.11"
-dependencies = []

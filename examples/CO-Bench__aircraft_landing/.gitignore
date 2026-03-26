@@ -3,4 +3,3 @@ __pycache__/
 results.json
 uv.lock
 .venv/
-data/*.txt

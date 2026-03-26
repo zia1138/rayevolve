@@ -1,0 +1,9 @@
+[project]
+name = "cobench-aircraft-landing"
+version = "0.1.0"
+description = "CO-Bench Aircraft Landing Scheduling Problem for rayevolve"
+requires-python = ">=3.11"
+dependencies = [
+    "ray==2.54.0",
+    "typer==0.24.1",
+]

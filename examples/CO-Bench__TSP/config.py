@@ -1,4 +1,13 @@
-"""Rayevolve config for CO-Bench Travelling Salesman Problem."""
+"""Rayevolve config for CO-Bench Travelling Salesman Problem.
+
+CO-Bench evaluation difference:
+    The original CO-Bench benchmark enforces a strict 60-second per-instance
+    timeout via SIGALRM. Our evaluator instead runs all selected instances in
+    parallel as Ray remote tasks with a single global timeout (ray.wait), and
+    cancels any that exceed it. This "relaxed" approach avoids signal-based
+    constraints and lets Ray manage concurrency, but means a slow instance
+    only costs wall-clock time rather than being hard-killed at exactly 60s.
+"""
 
 import os
 import textwrap

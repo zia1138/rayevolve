@@ -2,12 +2,13 @@
 
 from huggingface_hub import HfFileSystem
 from pathlib import Path
+import typer
 
 
-if __name__ == "__main__":
+def main(all_files: bool = typer.Option(False, "--all")) -> None:
     fs = HfFileSystem()
 
-    src_dir = "datasets/CO-Bench/CO-Bench"
+    src_dir = "datasets/CO-Bench/FrontierCO"
     dst_dir = Path("./")
 
     scanned = 0
@@ -22,13 +23,18 @@ if __name__ == "__main__":
             skipped_py += 1
             continue
 
+        if not all_files and "valid_instances" not in path:
+            continue
+
         # compute relative path
         rel_path = path[len(src_dir):].lstrip("/")
         out_path = dst_dir / rel_path
 
-        # only download if destination directory already exists
-        if not out_path.parent.exists():
+        # only download if parent exists; create destination dir if needed
+        parent_dir = out_path.parent
+        if not parent_dir.parent.exists():
             continue
+        parent_dir.mkdir(parents=True, exist_ok=True)
 
         # copy file
         with fs.open(path, "rb") as fsrc, open(out_path, "wb") as fdst:
@@ -40,4 +46,8 @@ if __name__ == "__main__":
         "Done."
         f" Scanned: {scanned}, kept .py: {skipped_py}, downloaded: {downloaded}."
     )
+
+
+if __name__ == "__main__":
+    typer.run(main)
 

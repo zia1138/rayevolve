@@ -318,7 +318,7 @@ def evaluate_candidate(main_py_path: str | Path, data_dir: Path, test: bool = Fa
         all_instances = load_data(str(instance_file))
 
         for idx, instance in enumerate(all_instances):
-            instance_id = f"{instance_file.stem}_{idx}"
+            instance_id = f"{instance_file.name}_{idx}"
             result = _solve_and_eval(main_py_path, instance_id, instance)
 
             if result["error"] is not None:

@@ -3,4 +3,6 @@ name = "cvrp"
 version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "typer>=0.24.1",
+]

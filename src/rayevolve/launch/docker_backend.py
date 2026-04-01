@@ -38,21 +38,24 @@ def _get_docker_config(package_manager: str) -> Tuple[str, str, Dict[str, str]]:
     if package_manager == "uv":
         return (
             "ghcr.io/astral-sh/uv:python3.11-bookworm-slim",
-            "/root/.cache/uv",
-            {"UV_PROJECT_ENVIRONMENT": "/tmp/.venv"}
+            "/tmp/uv_cache",
+            {
+                "UV_PROJECT_ENVIRONMENT": "/tmp/.venv",
+                "UV_CACHE_DIR": "/tmp/uv_cache"
+            }
         )
     elif package_manager == "pixi":
         return (
             "ghcr.io/prefix-dev/pixi:latest",
-            "/root/.cache/pixi",
-            {}
+            "/tmp/pixi_cache",
+            {"PIXI_CACHE_DIR": "/tmp/pixi_cache"}
         )
     else:
         # Fallback
         return (
             "python:3.11-slim",
-            "/root/.cache/pip",
-            {}
+            "/tmp/pip_cache",
+            {"PIP_CACHE_DIR": "/tmp/pip_cache"}
         )
 
 def run_in_docker(
@@ -102,7 +105,8 @@ def run_in_docker(
         except Exception:
             pass
     finally:
-        stdout_bytes, stderr_bytes = container.logs(demux=True)
+        stdout_bytes = container.logs(stdout=True, stderr=False)
+        stderr_bytes = container.logs(stdout=False, stderr=True)
         stdout_text = stdout_bytes.decode("utf-8") if stdout_bytes else ""
         stderr_text = stderr_bytes.decode("utf-8") if stderr_bytes else ""
         
@@ -117,7 +121,7 @@ def run_in_docker(
 # 2. Remote Ray Execution Tasks
 # ==============================================================================
 
-@ray.remote
+#@ray.remote
 def ray_evaluator_task_docker(
     parent_zip_bytes: bytes,
     generated_code: str,
@@ -242,7 +246,7 @@ class DockerExecutionBackend(ExecutionBackend):
             timeout_sec=self.config.timeout_sec,
             package_manager=self.config.package_manager
         )
-        
+
         result_zip_bytes: bytes = ray.get(future)
         rtime = time.time() - t0
 

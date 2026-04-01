@@ -37,23 +37,6 @@ file [src/rayevolve/core/common.py](src/rayevolve/core/common.py)
 all the configuration parameters along with a function to validate these
 parameters. 
 
-# TODO
-
-## Priority
-- [ ] continue to clean up config system
-- [ ] add multiple model support (try to get to 2.635 on circle packing)
-
-## Important but not urgent
-- [ ] integrate and experiment with examples from openevolve use to drive/priortize improvement
-- [ ] handle runtime timeouts correctly (took too long to run)
-- [ ] identify codebaes and projects with good evaluators + benchmarks to migrate into tool
-- [ ] handle logging correctly on ray cluster (get logs to driver somehow)
-
-## Algorithmic Ideas
-- [ ] dynamically optimizing and updating the system prompt based on where the system is getting stuck
-- [ ] add a meta-optimizer to get the system unstuck and adds strategic guidance 
-- [ ] for exploit/explore improve probe functionality, not clear it is always useful
-
 # Related Open Source Projects
 
 * [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve)
@@ -63,6 +46,11 @@ parameters.
 * [station](https://github.com/dualverse-ai/station)
 * [CSE/EvoControl](https://github.com/QuantaAlpha/EvoControl)
 * [TTT-Discover](https://github.com/test-time-training/discover)
+* [ASI-Arch](https://github.com/GAIR-NLP/ASI-Arch)
+* [autoresearch](https://github.com/karpathy/autoresearch)
+* [CodeEvovle](https://github.com/inter-co/science-codeevolve)
+* [GEPA](https://github.com/gepa-ai/gepa)
+* [TheaEvovle](https://github.com/ypwang61/ThetaEvolve)
 
 # Cluster Support
 

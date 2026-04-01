@@ -261,7 +261,7 @@ class EvoWorker:
             model_settings=settings)
 
         @evo_exploit.tool
-        def run_experiment(ctx: RunContext[ExploitContext], change: str, program: str) -> str:
+        def run_experiment(ctx: RunContext[ExploitContext], program: str, change: str) -> str:
             """
             Call this tool with an improved program that you want to evaluate. It will return
             the results of executing the program including its score, correctness, and stdout/stderr.
@@ -475,7 +475,7 @@ class EvoWorker:
             model_settings=settings)
 
         @evo_explore.tool(retries = 3)
-        async def run_experiment(ctx: RunContext[ExploreContext], change: str, novel_program: str) -> str:
+        async def run_experiment(ctx: RunContext[ExploreContext], novel_program: str, change: str) -> str:
             """
             Run the novel program and confirm it is correct and check if it achieves the minimum score.
 

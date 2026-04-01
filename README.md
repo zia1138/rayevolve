@@ -39,18 +39,26 @@ parameters.
 
 # Related Open Source Projects
 
+Related projects use search, like rayevolve. Some also incorporate reinforcement learning (RL).
+
+## No RL 
+
 * [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve)
 * [OpenEvolve](https://github.com/algorithmicsuperintelligence/openevolve)
 * [LLM4AD](https://github.com/Optima-CityU/llm4ad)
 * [GigaEvo](https://github.com/AIRI-Institute/gigaevo-platform/tree/main)
 * [station](https://github.com/dualverse-ai/station)
 * [CSE/EvoControl](https://github.com/QuantaAlpha/EvoControl)
-* [TTT-Discover](https://github.com/test-time-training/discover)
-* [ASI-Arch](https://github.com/GAIR-NLP/ASI-Arch)
 * [autoresearch](https://github.com/karpathy/autoresearch)
-* [CodeEvovle](https://github.com/inter-co/science-codeevolve)
+* [ASI-Arch](https://github.com/GAIR-NLP/ASI-Arch)
 * [GEPA](https://github.com/gepa-ai/gepa)
-* [TheaEvovle](https://github.com/ypwang61/ThetaEvolve)
+* [CodeEvolve](https://github.com/inter-co/science-codeevolve)
+
+## RL Incorporated
+
+* [ThetaEvolve](https://github.com/ypwang61/ThetaEvolve)
+* [TTT-Discover](https://github.com/test-time-training/discover)
+
 
 # Cluster Support
 

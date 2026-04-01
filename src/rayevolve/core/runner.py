@@ -12,7 +12,8 @@ import ray
 from rayevolve.core.dbase2 import ProgramDatabase, Program
 from .worker2 import EvoWorker, EvoGen
 from .common import EvolutionConfig, BackendConfig
-from rayevolve.launch.ray_backend import RayExecutionBackend, zip_dir_to_bytes
+from rayevolve.launch.ray_backend import RayExecutionBackend
+from rayevolve.launch.common import zip_dir_to_bytes
 import logfire
 
 # Set up logging
@@ -182,7 +183,6 @@ class EvolutionRunner:
 
         if results.get('correct'):
             combined :float = results.get("combined_score")
-            # TODO: Update dbase2.Program to avoid metadata field.
             db_program = Program(
                 id=str(uuid.uuid4()),
                 code=initial_code,
@@ -193,6 +193,7 @@ class EvolutionRunner:
                 correct=True,
                 combined_score=combined,
                 language=self.evo_config.lang_identifier,
+                compute_time=rtime,                
             )
 
             ray.get(self.db.add.remote(db_program, verbose=True))

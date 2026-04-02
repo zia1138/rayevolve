@@ -46,6 +46,7 @@ Related projects use search, like rayevolve. Some also incorporate reinforcement
 * [ShinkaEvolve](https://github.com/SakanaAI/ShinkaEvolve)
 * [OpenEvolve](https://github.com/algorithmicsuperintelligence/openevolve)
 * [LLM4AD](https://github.com/Optima-CityU/llm4ad)
+* [skydiscover](https://github.com/skydiscover-ai/skydiscover)
 * [GigaEvo](https://github.com/AIRI-Institute/gigaevo-platform/tree/main)
 * [station](https://github.com/dualverse-ai/station)
 * [CSE/EvoControl](https://github.com/QuantaAlpha/EvoControl)

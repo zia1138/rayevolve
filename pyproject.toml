@@ -11,7 +11,6 @@ dependencies = [
     "ray[default]>=2.9.1",
     "pydantic-ai>=1.23.0",
     "typer>=0.12.0",
-    "docker>=7.1.0",
 ]
 
 [project.scripts]

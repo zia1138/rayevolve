@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import os
+import contextlib
+import concurrent.futures
 import typer
 import runpy
+from typing import List
 from pathlib import Path
 from dataclasses import asdict
 import ray
@@ -139,6 +142,55 @@ def _normalize_nonempty(s: str | None) -> str | None:
     return s or None
 
 
+@contextlib.contextmanager
+def _ray_session(ray_address: str | None, ray_ip: str | None, ray_port: int, ray_debug: bool):
+    """Initialize Ray, yield, then shut down."""
+    env_vars: dict[str, str] = {}
+    if ray_debug:
+        env_vars["RAY_DEBUG"] = "1"
+        env_vars["RAY_DEBUG_POST_MORTEM"] = "1"
+
+    runtime_env = {"env_vars": env_vars} if env_vars else None
+
+    ray_address = _normalize_nonempty(ray_address)
+    ray_ip = _normalize_nonempty(ray_ip)
+
+    if ray_address and ray_ip:
+        raise typer.BadParameter("Use either --ray-address or --ray-ip/--ray-port, not both.")
+
+    if ray_address:
+        if not ray_address.startswith("ray://"):
+            raise typer.BadParameter(
+                "Ray address must start with ray://, e.g. ray://127.0.0.1:10001"
+            )
+        ray.init(address=ray_address, runtime_env=runtime_env)
+    elif ray_ip:
+        ray.init(address=f"ray://{ray_ip}:{ray_port}", runtime_env=runtime_env)
+    else:
+        ray.init(runtime_env=runtime_env)
+
+    try:
+        yield
+    finally:
+        ray.shutdown()
+
+
+def _run_single_project(project_dir: str, profile: str) -> None:
+    """Load config and run evolution for a single project."""
+    config_file = resolve_config_file(project_dir)
+    ns = load_config_file(config_file)
+
+    get_config = ns.get("get_config")
+    if not callable(get_config):
+        raise typer.BadParameter(f"config.py in {project_dir} must define get_config(profile)")
+
+    cfg: RayEvolveConfig = get_config(profile)
+    validate(cfg)
+
+    evo_runner = EvolutionRunner(cfg.evo, cfg.backend, project_dir, verbose=True)
+    evo_runner.run_ray()
+
+
 @app.command()
 def run(
     project_dir: str = typer.Argument(..., help="Path to project/data folder containing config.py"),
@@ -168,59 +220,93 @@ def run(
     """
     Run rayevolve using the given profile from config.py in the specified project directory.
     """
-    config_file = resolve_config_file(project_dir)
-    ns = load_config_file(config_file)
-
-    get_config = ns.get("get_config")
-    if not callable(get_config):
-        raise typer.BadParameter("config.py must define get_config(profile)")
-
-    cfg: RayEvolveConfig = get_config(profile)
-    validate(cfg)
-
     typer.echo(f"run_name={run_name} seed={seed} profile={profile}")
 
     if dry_run:
+        config_file = resolve_config_file(project_dir)
+        ns = load_config_file(config_file)
+        get_config = ns.get("get_config")
+        if not callable(get_config):
+            raise typer.BadParameter("config.py must define get_config(profile)")
+        cfg: RayEvolveConfig = get_config(profile)
+        validate(cfg)
         return
 
-    env_vars: dict[str, str] = {}
-    if ray_debug:
-        env_vars["RAY_DEBUG"] = "1"
-        env_vars["RAY_DEBUG_POST_MORTEM"] = "1"  # fixed typo
+    with _ray_session(ray_address, ray_ip, ray_port, ray_debug):
+        _run_single_project(project_dir, profile)
 
-    runtime_env = {"env_vars": env_vars} if env_vars else None
 
-    ray_address = _normalize_nonempty(ray_address)
-    ray_ip = _normalize_nonempty(ray_ip)
+@app.command()
+def run_batch(
+    project_dirs: List[str] = typer.Argument(..., help="One or more project directories"),
+    profile: str = typer.Option("default"),
+    max_concurrent: int = typer.Option(
+        1,
+        help="Max projects running simultaneously. 1 = sequential.",
+    ),
+    ray_debug: bool = typer.Option(False, help="Enable Ray debug env vars"),
+    ray_address: str | None = typer.Option(
+        None,
+        help="Optional Ray Client address (ray://<host>:<port>).",
+    ),
+    ray_ip: str | None = typer.Option(
+        None,
+        help="Alternative to --ray-address: specify Ray head IP/host.",
+    ),
+    ray_port: int = typer.Option(
+        10001,
+        callback=_validate_port,
+        help="Ray Client port (default: 10001). Only used with --ray-ip.",
+        show_default=True,
+    ),
+):
+    """
+    Run rayevolve on multiple projects. Projects run sequentially by default;
+    use --max-concurrent to run multiple projects in parallel.
+    """
+    # Validate all projects upfront before starting Ray.
+    for proj in project_dirs:
+        resolve_config_file(proj)
 
-    if ray_address and ray_ip:
-        raise typer.BadParameter("Use either --ray-address or --ray-ip/--ray-port, not both.")
+    typer.echo(f"Batch: {len(project_dirs)} projects, max_concurrent={max_concurrent}")
 
-    # Connect to a ray cluster or initialze ray locally.
-    if ray_address:
-        if not ray_address.startswith("ray://"):
-            raise typer.BadParameter(
-                "Ray address must start with ray://, e.g. ray://127.0.0.1:10001"
-            )
-        ray.init(address=ray_address, runtime_env=runtime_env)
+    results: dict[str, tuple[bool, str | None]] = {}
 
-    elif ray_ip:
-        ray.init(address=f"ray://{ray_ip}:{ray_port}", runtime_env=runtime_env)
+    with _ray_session(ray_address, ray_ip, ray_port, ray_debug):
+        if max_concurrent <= 1:
+            for proj in project_dirs:
+                typer.echo(f"\n{'='*60}\nRunning: {proj}\n{'='*60}")
+                try:
+                    _run_single_project(proj, profile)
+                    results[proj] = (True, None)
+                except Exception as e:
+                    typer.echo(f"FAILED: {proj} -- {e}", err=True)
+                    results[proj] = (False, str(e))
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+                futures = {
+                    pool.submit(_run_single_project, proj, profile): proj
+                    for proj in project_dirs
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    proj = futures[future]
+                    try:
+                        future.result()
+                        results[proj] = (True, None)
+                        typer.echo(f"DONE: {proj}")
+                    except Exception as e:
+                        typer.echo(f"FAILED: {proj} -- {e}", err=True)
+                        results[proj] = (False, str(e))
 
-    else:
-        ray.init(runtime_env=runtime_env)
+    # Print summary
+    typer.echo(f"\n{'='*60}\nBATCH SUMMARY\n{'='*60}")
+    for proj, (ok, err) in results.items():
+        status = "OK" if ok else f"FAILED: {err}"
+        typer.echo(f"  {proj}: {status}")
 
-    try:
-        evo_runner = EvolutionRunner(
-            cfg.evo,
-            cfg.backend,
-            project_dir,
-            verbose=True,
-        )
-        evo_runner.run_ray()
-
-    finally:
-        ray.shutdown()
+    failed = sum(1 for ok, _ in results.values() if not ok)
+    if failed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

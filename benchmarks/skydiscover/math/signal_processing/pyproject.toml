@@ -1,0 +1,10 @@
+[project]
+name = "signal-processing"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.4.4",
+    "pywavelets>=1.9.0",
+    "scipy>=1.17.1",
+]
